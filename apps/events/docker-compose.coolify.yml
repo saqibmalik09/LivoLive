@@ -1,0 +1,41 @@
+# SK Live events — https://events.skliveparty.online
+services:
+  events:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: sklive-events:local
+    container_name: sklive-events
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    networks:
+      - coolify
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-events-gzip.compress=true
+      - traefik.http.middlewares.sklive-events-https.redirectscheme.scheme=https
+      - traefik.http.routers.sklive-events-http.entryPoints=http
+      - traefik.http.routers.sklive-events-http.rule=Host(`events.skliveparty.online`)
+      - traefik.http.routers.sklive-events-http.middlewares=sklive-events-https
+      - traefik.http.routers.sklive-events-http.service=sklive-events
+      - traefik.http.routers.sklive-events-https.entryPoints=https
+      - traefik.http.routers.sklive-events-https.rule=Host(`events.skliveparty.online`)
+      - traefik.http.routers.sklive-events-https.middlewares=sklive-events-gzip
+      - traefik.http.routers.sklive-events-https.service=sklive-events
+      - traefik.http.routers.sklive-events-https.tls=true
+      - traefik.http.routers.sklive-events-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-events.loadbalancer.server.port=3000
+
+networks:
+  coolify:
+    external: true

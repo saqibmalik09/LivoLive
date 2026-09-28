@@ -1,0 +1,223 @@
+name: sk_live
+description: "LIVO — A premium social audio community and entertainment platform featuring real-time voice rooms, gamified user interactions, virtual gifting with animated effects, CP/Family clan systems, mini-games, and a full virtual economy. Built with Supabase/Zuvo backend and Orbit voice."
+publish_to: 'none'
+version: 1.3.0+24
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # ════════════════════════════════════════════════
+  # ICONS
+  # ════════════════════════════════════════════════
+  cupertino_icons: ^1.0.8
+  flutter_svg: ^2.0.17             # SVG icons & illustrations
+  iconsax_flutter: ^1.0.0          # Premium icon pack
+
+  # ════════════════════════════════════════════════
+  # BACKEND — Supabase (Auth, Database, Storage, Realtime)
+  # ════════════════════════════════════════════════
+  supabase_flutter: ^2.9.0         # Supabase SDK (Auth, Realtime, PostgREST, Storage)
+  socket_io_client: ^3.0.2         # Redis realtime gateway (Socket.IO)
+
+  # ════════════════════════════════════════════════
+  # VOICE / AUDIO ENGINE — Orbit
+  # ════════════════════════════════════════════════
+  orbit_voice: ^0.3.0                          # DeepFilterNet denoise on by default
+
+  # ════════════════════════════════════════════════
+  # STATE MANAGEMENT
+  # ════════════════════════════════════════════════
+  provider: ^6.1.4                 # App-wide state management
+  flutter_riverpod: ^2.6.1         # Alternative reactive state (recommended for scale)
+
+  # ════════════════════════════════════════════════
+  # NAVIGATION
+  # ════════════════════════════════════════════════
+  go_router: ^14.8.1               # Declarative routing with deep link support
+
+  # ════════════════════════════════════════════════
+  # UI & ANIMATIONS
+  # ════════════════════════════════════════════════
+  google_fonts: ^6.2.1             # Premium typography (Poppins, Inter, etc.)
+  shimmer: ^3.0.0                  # Skeleton loading effects
+  lottie: ^3.3.1                   # Gift animations (Lottie JSON)
+  flutter_animate: ^4.5.2          # Declarative micro-animations
+  animated_text_kit: ^4.2.3        # Text entrance animations
+  flutter_staggered_animations: ^1.1.1  # List/grid staggered reveals
+  glassmorphism_ui: ^0.3.0         # Glassmorphism cards & containers
+  confetti: ^0.8.0                 # Celebration effects (level up, wins)
+  flutter_spinkit: ^5.2.1          # Loading spinners
+  flutter_svga: ^0.0.13
+  fl_chart: ^0.71.0
+
+  # ════════════════════════════════════════════════
+  # IMAGE, MEDIA & CAMERA
+  # ════════════════════════════════════════════════
+  cached_network_image: ^3.4.1     # Efficient image caching (avatars, feeds)
+  image_picker: ^1.1.2             # Camera & gallery for profile pics / moments
+  file_picker: ^8.1.7              # SVGA / document pickers (room backgrounds)
+  image_cropper: ^9.0.0            # Crop profile pictures before upload
+  photo_view: ^0.15.0              # Zoomable image viewer (social feed)
+  video_player: ^2.9.2             # Video playback (moments / feed)
+
+  # ════════════════════════════════════════════════
+  # PERMISSIONS
+  # ════════════════════════════════════════════════
+  permission_handler: ^11.4.0      # Runtime permissions (mic, camera, storage, bluetooth)
+
+  # ════════════════════════════════════════════════
+  # LOCAL STORAGE & PERSISTENCE
+  # ════════════════════════════════════════════════
+  shared_preferences: ^2.5.3       # Key-value local storage (settings, onboarding flags)
+  hive_flutter: ^1.1.0             # Fast NoSQL local DB (draft messages, offline cache)
+
+  # ════════════════════════════════════════════════
+  # NETWORKING & CONNECTIVITY
+  # ════════════════════════════════════════════════
+  connectivity_plus: ^7.0.0        # network state monitoring
+  dio: ^5.8.0                      # HTTP client (API calls, webhook triggers)
+
+  # ════════════════════════════════════════════════
+  # PUSH NOTIFICATIONS (Firebase)
+  # ════════════════════════════════════════════════
+  firebase_core: ^3.13.0           # Firebase core initialization
+  firebase_messaging: ^15.2.4      # FCM push notifications
+  firebase_crashlytics: ^4.3.5     # Crash + non-fatal error reporting
+  firebase_performance: ^0.10.1+5  # Custom traces + screen performance
+  firebase_analytics: ^11.4.5      # Screen views + lag events
+  flutter_local_notifications: ^18.0.1  # Local notification UI
+
+  # ════════════════════════════════════════════════
+  # SOCIAL LOGIN
+  # ════════════════════════════════════════════════
+  google_sign_in: ^6.2.2           # Google OAuth login
+  flutter_facebook_auth: ^7.1.1    # Facebook OAuth login
+
+  # ════════════════════════════════════════════════
+  # IN-APP PURCHASES & PAYMENTS
+  # ════════════════════════════════════════════════
+  in_app_purchase: ^3.3.0          # Play Billing Library 8+ (Play Console requirement)
+  pay: ^3.0.0                      # Google Pay / Apple Pay integration
+  in_app_update: ^4.0.2            # Official Play Store In-App Updates
+
+  # ════════════════════════════════════════════════
+  # BACKGROUND SERVICES (Voice room alive when minimized)
+  # ════════════════════════════════════════════════
+  flutter_background_service: ^5.0.12  # Keep voice room running in background
+  flutter_overlay_window:              # Patched: bubble_removed on destroy/task-removed
+    path: packages/flutter_overlay_window
+  wakelock_plus: ^1.2.8            # Prevent screen sleep during active room
+
+  # ════════════════════════════════════════════════
+  # UTILITIES
+  # ════════════════════════════════════════════════
+  intl: ^0.20.2                    # Date/time formatting, localization
+  characters: ^1.4.0               # Grapheme-safe string truncate (emoji / complex scripts)
+  uuid: ^4.5.1                     # UUID generation
+  url_launcher: ^6.3.1             # Open external URLs & deep links
+  package_info_plus: ^8.2.1        # Get app version information
+  android_id: ^0.4.0               # Settings.Secure.ANDROID_ID for device bans
+  device_info_plus: ^12.3.0        # iOS identifierForVendor / device metadata
+  share_plus: ^10.1.4              # Share content (referral links, moments)
+  gal: ^2.3.3                      # Save room chat images to gallery
+  path_provider: ^2.1.5            # File system paths (downloads, cache)
+  flutter_secure_storage: ^9.2.4   # Secure storage for tokens & sensitive data
+  timeago: ^3.7.0                  # "5 min ago" style timestamps
+  emoji_picker_flutter: ^4.3.0     # Emoji keyboard for chat & rooms
+  pinput: ^5.0.1                   # OTP input fields (phone verification)
+  flutter_linkify: ^6.0.0          # Auto-detect and linkify URLs in chat
+  audioplayers: ^6.1.0             # Sound effects (gift received, notification)
+  badges: ^3.1.2                   # Notification badge indicators
+  smooth_page_indicator: ^1.2.0    # Page view indicators (onboarding, events)
+  pull_to_refresh_flutter3: ^2.0.2 # Pull-to-refresh for feeds & lists
+  flutter_slidable: ^3.1.1         # Swipe actions on list items (chat, rooms)
+  carousel_slider: ^5.0.0          # Image/banner carousels (events, shop)
+  country_picker: ^2.0.27
+  record: ^6.2.0
+  path: ^1.9.1
+  rxdart: ^0.28.0
+  youtube_player_iframe: ^6.0.2
+  youtube_explode_dart: ^3.1.0
+  flutter_inappwebview: ^6.1.5
+  app_links: ^7.0.0
+  just_audio: ^0.10.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.13            # Code generation runner
+  hive_generator: ^2.0.1           # Hive model code generation
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/branding/app_logo.png"
+  adaptive_icon_background: "#12081C"
+  # Padded so Android's adaptive mask does not clip the neon ring.
+  adaptive_icon_foreground: "assets/branding/app_logo_adaptive.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+
+flutter:
+  generate: true
+  uses-material-design: true
+
+  assets:
+    - assets/branding/
+    - assets/auth/
+    - assets/nav/
+    - assets/home/
+    - assets/home/tabs/
+    - assets/home/banners/
+    - assets/home/hot-cards/
+    - assets/room/
+    - assets/room/toolbar/
+    - assets/room/effects/
+    - assets/profile/
+    - assets/wallet/
+    - assets/ranking/
+    - assets/ranking/agency/
+    - assets/ranking/charm/
+    - assets/ranking/gift/
+    - assets/levels/
+    - assets/bd/badges/
+    - assets/events/cp/
+    - assets/events/weekly-star/
+    - assets/events/game-star/
+    - assets/events/sk-party/
+    - assets/chat/
+    - assets/rewards/
+    - assets/rewards/charm-reward/
+    - assets/rewards/lucky-bag/
+    - assets/social/
+    - assets/social/buddies/
+    - assets/games/
+    - assets/invite/
+    - assets/effects/
+    - assets/deep_links/
+    - assets/sounds/
+
+  #       - asset: assets/fonts/Poppins-Medium.ttf
+  #         weight: 500
+  #       - asset: assets/fonts/Poppins-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/Poppins-Bold.ttf
+  #         weight: 700
+  #       - asset: assets/fonts/Poppins-ExtraBold.ttf
+  #         weight: 800
+
+dependency_overrides:
+  # Same local DeepFilterNet studio build Rave uses — pub 0.3.0 denoise
+  # does not match the working path package (0.4.0).
+  orbit_voice:
+    path: ../../orbit-voice/packages/orbit_voice
+  # orbit_voice / its stack need this pin (protobuf ^6). Do not pin 4.2.0.
+  flutter_webrtc: 1.6.0

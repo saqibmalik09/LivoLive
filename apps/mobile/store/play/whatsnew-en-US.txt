@@ -1,0 +1,8 @@
+What's new in 1.2.6
+
+• Faster Lucky & Lucky Pro gifts in rooms — smoother combo and jackpot feedback
+• Mention friends from the room profile card — one tap to @ them in chat
+• More mini-games and game hub updates
+• Clearer win announcements and gift effects in live rooms
+• Stronger voice rooms — more reliable mic join and audio
+• Polished splash branding and overall stability improvements

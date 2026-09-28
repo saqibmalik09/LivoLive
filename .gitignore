@@ -1,0 +1,41 @@
+# Secrets — never commit
+secrets/
+*.env
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+*.cer
+
+# Local DB dumps
+ops/backups/
+*.sql.gz
+*.dump
+
+# Unsorted drop zone
+_inbox/
+
+# Build / dependency output
+node_modules/
+.next/
+build/
+dist/
+.dart_tool/
+*.log
+
+# macOS
+.DS_Store
+._*
+
+# Android signing config (passwords in plaintext)
+key.properties
+
+# Release binaries (large)
+*.apk
+*.aab
+
+# Development stub for the missing vendor voice package — scaffolding, not source
+/orbit-voice/

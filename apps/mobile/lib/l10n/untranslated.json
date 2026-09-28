@@ -1,0 +1,43 @@
+{
+  "pt": [
+    "profile_inviteFriend",
+    "profile_blacklist",
+    "profile_settings",
+    "blacklist_chatTab",
+    "blacklist_roomTab",
+    "blacklist_emptyChat",
+    "blacklist_emptyRoom",
+    "blacklist_unblock",
+    "blacklist_unblocked",
+    "blacklist_noRoom",
+    "chat_blockedCannotMessage"
+  ],
+
+  "th": [
+    "profile_inviteFriend",
+    "profile_blacklist",
+    "profile_settings",
+    "blacklist_chatTab",
+    "blacklist_roomTab",
+    "blacklist_emptyChat",
+    "blacklist_emptyRoom",
+    "blacklist_unblock",
+    "blacklist_unblocked",
+    "blacklist_noRoom",
+    "chat_blockedCannotMessage"
+  ],
+
+  "vi": [
+    "profile_inviteFriend",
+    "profile_blacklist",
+    "profile_settings",
+    "blacklist_chatTab",
+    "blacklist_roomTab",
+    "blacklist_emptyChat",
+    "blacklist_emptyRoom",
+    "blacklist_unblock",
+    "blacklist_unblocked",
+    "blacklist_noRoom",
+    "chat_blockedCannotMessage"
+  ]
+}

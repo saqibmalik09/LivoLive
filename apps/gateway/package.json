@@ -1,0 +1,25 @@
+{
+  "name": "rave-realtime-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Socket.IO gateway backed by Redis pub/sub for Rave Star rooms",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.0.5"
+  }
+}

@@ -1,0 +1,62 @@
+# SK Live realtime gateway on Coolify VPS (same host as Supabase).
+# Networks:
+#   coolify              → Traefik (coolify-proxy) HTTPS
+#   mnq3vesx0syflb0m0bot3oa2 → reach supabase-db
+#
+# Usage on VPS:
+#   cd /opt/sklive-gateway && sudo docker compose -f docker-compose.coolify.yml --env-file .env up -d --build
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: sklive-gateway-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - sklive_gw
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sklive-gateway:local
+    container_name: sklive-gateway
+    restart: unless-stopped
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      REDIS_URL: redis://sklive-gateway-redis:6379
+    networks:
+      - sklive_gw
+      - coolify
+      - supabase
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-gw-gzip.compress=true
+      - traefik.http.middlewares.sklive-gw-https.redirectscheme.scheme=https
+      # HTTP → HTTPS
+      - traefik.http.routers.sklive-gw-http.entryPoints=http
+      - traefik.http.routers.sklive-gw-http.rule=Host(`gateway.skliveparty.online`)
+      - traefik.http.routers.sklive-gw-http.middlewares=sklive-gw-https
+      - traefik.http.routers.sklive-gw-http.service=sklive-gw
+      # HTTPS
+      - traefik.http.routers.sklive-gw-https.entryPoints=https
+      - traefik.http.routers.sklive-gw-https.rule=Host(`gateway.skliveparty.online`)
+      - traefik.http.routers.sklive-gw-https.middlewares=sklive-gw-gzip
+      - traefik.http.routers.sklive-gw-https.service=sklive-gw
+      - traefik.http.routers.sklive-gw-https.tls=true
+      - traefik.http.routers.sklive-gw-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-gw.loadbalancer.server.port=3000
+
+networks:
+  sklive_gw:
+    name: sklive-gateway-net
+  coolify:
+    external: true
+  supabase:
+    external: true
+    name: mnq3vesx0syflb0m0bot3oa2

@@ -1,0 +1,25 @@
+import { RoomDecorationForm } from "@/components/RoomDecorationForm";
+import { ArrowLeft, Palette } from "lucide-react";
+import Link from "next/link";
+export default function NewRoomDecorationPage() {
+  return (
+    <div className="space-y-10 pb-32">
+      <Link
+        href="/settings/room-decorations"
+        className="inline-flex items-center gap-2 text-white/40 hover:text-white transition-colors group"
+      >
+        <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform" />
+        <span className="text-xs font-bold uppercase tracking-widest">Back</span>
+      </Link>
+
+      <header className="flex items-center gap-6">
+        <div className="w-20 h-20 rounded-3xl bg-indigo-500/20 flex items-center justify-center text-indigo-400">
+          <Palette size={40} />
+        </div>
+        <h1 className="text-5xl font-black tracking-tighter">New background</h1>
+      </header>
+
+      <RoomDecorationForm />
+    </div>
+  );
+}

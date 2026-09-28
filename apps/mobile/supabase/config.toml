@@ -1,0 +1,5 @@
+[functions.room-link]
+verify_jwt = false
+
+[functions.tulasi-game]
+verify_jwt = false

@@ -1,0 +1,135 @@
+services:
+  redis:
+    image: 'redis:7-alpine'
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+      - 'rr1rnq2qirqyr2yinczwpsse_redis-data:/data'
+    container_name: redis-rr1rnq2qirqyr2yinczwpsse
+    labels:
+      - coolify.managed=true
+      - coolify.version=4.3.23
+      - coolify.serviceId=3
+      - coolify.type=service
+      - coolify.name=redis-rr1rnq2qirqyr2yinczwpsse
+      - coolify.resourceName=service-hxgf61fwxscz8fneel9gyqgs
+      - coolify.projectName=voice-pilot
+      - coolify.serviceName=redis
+      - coolify.environmentName=production
+      - coolify.pullRequestId=0
+      - coolify.service.subId=3
+      - coolify.service.subType=database
+      - coolify.service.subName=redis
+    networks:
+      rr1rnq2qirqyr2yinczwpsse: null
+    environment:
+      COOLIFY_RESOURCE_UUID: rr1rnq2qirqyr2yinczwpsse
+      COOLIFY_CONTAINER_NAME: redis-rr1rnq2qirqyr2yinczwpsse
+      SERVICE_NAME_REDIS: redis
+      SERVICE_NAME_LIVEKIT: livekit
+    env_file:
+      - .env
+  livekit:
+    image: 'livekit/livekit-server:latest'
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    environment:
+      LIVEKIT_CONFIG: "port: 7880\nrtc:\n  tcp_port: 7881\n  udp_port: 7882\n  use_external_ip: true\nkeys:\n  API83agB8Lo44Pp: dXtma9t8AdBHVzNTJ9LqmeEetKGhCdyt7AXAvfefB6uH\nredis:\n  address: redis:6379\nlogging:\n  level: info\n"
+      COOLIFY_RESOURCE_UUID: rr1rnq2qirqyr2yinczwpsse
+      COOLIFY_CONTAINER_NAME: livekit-rr1rnq2qirqyr2yinczwpsse
+      COOLIFY_FQDN: 'voice-test.almuqeetmarketing.com,voice.skliveparty.online'
+      COOLIFY_URL: 'https://voice-test.almuqeetmarketing.com,https://voice.skliveparty.online'
+      SERVICE_NAME_REDIS: redis
+      SERVICE_NAME_LIVEKIT: livekit
+    expose:
+      - '7880'
+    ports:
+      - '7881:7881/tcp'
+      - '7882:7882/udp'
+    depends_on:
+      - redis
+    container_name: livekit-rr1rnq2qirqyr2yinczwpsse
+    labels:
+      - coolify.managed=true
+      - coolify.version=4.3.23
+      - coolify.serviceId=3
+      - coolify.type=service
+      - coolify.name=livekit-rr1rnq2qirqyr2yinczwpsse
+      - coolify.resourceName=service-hxgf61fwxscz8fneel9gyqgs
+      - coolify.projectName=voice-pilot
+      - coolify.serviceName=livekit
+      - coolify.environmentName=production
+      - coolify.pullRequestId=0
+      - coolify.service.subId=29
+      - coolify.service.subType=application
+      - coolify.service.subName=livekit
+      - traefik.docker.network=rr1rnq2qirqyr2yinczwpsse
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.entryPoints=http
+      - traefik.http.routers.http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.middlewares=redirect-to-https
+      - 'traefik.http.routers.http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.rule=Host(`voice-test.almuqeetmarketing.com`) && PathPrefix(`/`)'
+      - traefik.http.routers.http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.service=http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252
+      - traefik.http.routers.http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.entryPoints=http
+      - traefik.http.routers.http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.middlewares=redirect-to-https
+      - 'traefik.http.routers.http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.rule=Host(`voice.skliveparty.online`) && PathPrefix(`/`)'
+      - traefik.http.routers.http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.service=http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252
+      - traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.entryPoints=https
+      - traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.middlewares=gzip
+      - 'traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.rule=Host(`voice-test.almuqeetmarketing.com`) && PathPrefix(`/`)'
+      - traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.service=https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252
+      - traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.tls.certresolver=letsencrypt
+      - traefik.http.routers.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.tls=true
+      - traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.entryPoints=https
+      - traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.middlewares=gzip
+      - 'traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.rule=Host(`voice.skliveparty.online`) && PathPrefix(`/`)'
+      - traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.service=https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252
+      - traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.tls.certresolver=letsencrypt
+      - traefik.http.routers.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.tls=true
+      - traefik.http.services.http-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.loadbalancer.server.port=7880
+      - traefik.http.services.http-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.loadbalancer.server.port=7880
+      - traefik.http.services.https-0-rr1rnq2qirqyr2yinczwpsse-livekit-1252.loadbalancer.server.port=7880
+      - traefik.http.services.https-1-rr1rnq2qirqyr2yinczwpsse-livekit-1252.loadbalancer.server.port=7880
+      - 'caddy_0.encode=zstd gzip'
+      - 'caddy_0.handle_path.0_reverse_proxy={{upstreams 7880}}'
+      - 'caddy_0.handle_path=/*'
+      - caddy_0.header=-Server
+      - 'caddy_0.try_files={path} /index.html /index.php'
+      - 'caddy_0=https://voice-test.almuqeetmarketing.com'
+      - 'caddy_1.encode=zstd gzip'
+      - 'caddy_1.handle_path.1_reverse_proxy={{upstreams 7880}}'
+      - 'caddy_1.handle_path=/*'
+      - caddy_1.header=-Server
+      - 'caddy_1.try_files={path} /index.html /index.php'
+      - 'caddy_1=https://voice.skliveparty.online'
+      - caddy_ingress_network=rr1rnq2qirqyr2yinczwpsse
+    networks:
+      rr1rnq2qirqyr2yinczwpsse: null
+    env_file:
+      - .env
+volumes:
+  rr1rnq2qirqyr2yinczwpsse_redis-data:
+    name: rr1rnq2qirqyr2yinczwpsse_redis-data
+networks:
+  rr1rnq2qirqyr2yinczwpsse:
+    name: rr1rnq2qirqyr2yinczwpsse
+    external: true

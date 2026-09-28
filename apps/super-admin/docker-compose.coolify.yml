@@ -1,0 +1,42 @@
+# SK Live super-admin (BD) — https://super.skliveparty.online
+services:
+  super:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: sklive-super-admin:local
+    container_name: sklive-super-admin
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NODE_OPTIONS: "--max-http-header-size=1048576"
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    networks:
+      - coolify
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-super-gzip.compress=true
+      - traefik.http.middlewares.sklive-super-https.redirectscheme.scheme=https
+      - traefik.http.routers.sklive-super-http.entryPoints=http
+      - traefik.http.routers.sklive-super-http.rule=Host(`super.skliveparty.online`)
+      - traefik.http.routers.sklive-super-http.middlewares=sklive-super-https
+      - traefik.http.routers.sklive-super-http.service=sklive-super
+      - traefik.http.routers.sklive-super-https.entryPoints=https
+      - traefik.http.routers.sklive-super-https.rule=Host(`super.skliveparty.online`)
+      - traefik.http.routers.sklive-super-https.middlewares=sklive-super-gzip
+      - traefik.http.routers.sklive-super-https.service=sklive-super
+      - traefik.http.routers.sklive-super-https.tls=true
+      - traefik.http.routers.sklive-super-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-super.loadbalancer.server.port=3000
+
+networks:
+  coolify:
+    external: true

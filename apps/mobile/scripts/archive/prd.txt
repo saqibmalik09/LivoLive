@@ -1,0 +1,55 @@
+Product Requirements Document (PRD)
+App Name: SK LIVE
+Theme: Light Purple (Premium Aesthetic & Glassmorphism)
+Category: Social Audio, Gamified Community & Entertainment Platform
+1. Project Ka Maqsad (Executive Summary)
+SK LIVE ek premium social platform hoga jahan community building, gamification aur entertainment par focus kiya jayega. App ki UI modern "Light Purple" theme par mabni hogi. Users aapas mein voice rooms ke zariye connect honge, text chat karenge, virtual gifts exchange karenge, aur sath mil kar in-app games khelenge.
+2. Core Feature Modules
+Module 1: User Authentication & Profile
+Login/Signup Methods: Google, Facebook, aur Phone Number.
+Phone Verification (OTP): OTP bhejne ke liye WhatsApp ko primary aur preferred method rakha jayega kyunke yeh fast aur reliable hai. Agar normal SMS messages ke zariye OTP bhejna hai toh uski API cost kafi zyada hoti hai; iske liye client ko apni SMS Gateway API provide karni hogi.
+User Profile: Custom avatars, bio, followers/following count, aur user ki unique ID.
+Module 2: Levels, Wealth & Charm System
+User Levels: Har user ka ek base level hoga jo app par daily tasks aur time spend karne se barhega.
+Wealth Levels: Yeh un users ke liye hoga jo heavy gifting karte hain. Jitne zyada coins spend honge, Wealth Level utna upar jayega aur exclusive frame badges milenge.
+Charm System (For Hosts): Yeh host ki popularity ka indicator hai. Jab log room mein aayenge ya gifts bhejenge toh host ka "Charm" barhega. Zyada charm wale hosts "Popular" tab mein top par nazar aayenge.
+Module 3: CP (Couple/Partner) & Family System
+CP Space: Do users aapas mein "Partner" (CP) ban sakte hain. Inke liye ek khas space hogi jahan unki bonding, shared gifts aur relationship duration show hogi. Inke profiles par special "Matching Frames" honge.
+Family System: Users apni "Family" (Clans) bana sakte hain. Mukhtalif families aapas mein events aur gifting ke zariye compete karengi taake Family Level barh sake.
+Module 4: Voice Rooms & Audio Broadcasting
+Multi-mic Slots: 8- 10 or more to 20 mic slots wale interactive audio rooms.
+Real-time Interaction: Live text chat, animated emojis, aur flying gifts.
+Room Controls: Host ke paas kisi ko mic par bulane, mute karne, ya room se nikalne ka mukammal control hoga.
+Module 5: Events, Tasks & Social Feed
+Task Center: New users aur daily active users ke liye tasks (e.g., "Room mein 10 min guzarein", "1 friend add karein") taake unhein reward mein coins ya XP mil sakein.
+Events Tab: Monthly ya festival-based special events jahan top rankers ko bade rewards milenge.
+Social Feed (Moments): Users apni pictures, thoughts aur videos post kar sakenge jahan log like aur comment kar sakein.
+Module 6: Virtual Economy & Mini-Games
+Wallet & In-App Purchases: Real money se app ke andar "Coins" kharidne ka system.
+Animated Gifts: Heavy animations wale gifts (jaise Rocket, Castles, Wings) jo screen par play honge.
+Mini-Games: Voice room ke andar 4-5 interactive games (jaise Ludo, Lucky Spin, Greed) jahan users apne coins laga kar khel sakenge.
+
+3. Business Model & Economy Rules (Client ke liye zaroori sawalat)
+Project ke flow ko final karne aur database architecture (wallet/transactions) design karne ke liye in economy points par aapka faisla zaroori hai:
+1. Basic Economy & Conversion Rates:
+Purchasing: 1 USD ($1) mein users ko kitne virtual Coins milenge?
+Withdrawal: Withdraw karte waqt Host ko kitne points/diamonds/gems par 1 USD milega? (Minimum withdrawal limit kya hogi?)
+2. Host Earnings & App Commission:
+Jab koi user kisi Host ko 100 Coins ka gift bhejta hai, toh Host ko us mein se kitna hissa (percentage) milega aur Admin/App kitna commission rakhegi? (Standard industry practice 30% se 50% tak hoti hai).
+3. Family (Clan) Wealth & Rewards:
+Family Creation Fee: Kya Family banane ke liye user ko coins pay karne honge ya koi specific level require hoga?
+Family Commission: Jab Family members aapas mein ya kisi aur ko gifts bhejte hain, toh kya Family Creator (Head) ko un gifts ka koi commission (maslan 1% ya 2%) milega?
+Family Wars: Family tournaments jeetne par members ko kya reward milega? (Coins pool distribute hoga, Diamonds milenge, ya sirf exclusive profile frames?)
+4. CP (Couple/Partner) Economy:
+CP Creation: CP banne ke liye kya do users ko aapas mein specific amount ke rings/gifts exchange karne honge?
+Shared Progress: Agar CP mein se kisi ek partner ko gift milta hai ya wo gift send karta hai, toh kya doosre partner ki CP value/level automatically barhegi? Kya inka koi joint task system hoga?
+5. Wealth Levels & Level-Up Logic:
+User Level: User ka normal level up karne ke liye kya criteria hoga? (Kya sirf room mein time spend karne se XP milegi ya sirf activity par?)
+Wealth Level: Wealth Level sirf coins spend karne par barhega? Kis level par pohnchne par user ko special entry animations (jaise room join karne par Rocket ya Car aana) free milengi?
+6. Game Tax & Economy:
+Jo mini-games app mein hongi (Ludo, Lucky Spin, etc.), unki winning calculation kya hogi? Kya har game ke total prize pool par app (admin) apna koi tax/commission (jaise 2% ya 5%) cut karegi?
+7. Event & Task Rewards:
+Daily tasks (jaise "Room mein 10 min guzarein" ya "Pehla gift send karein") complete karne par app ki taraf se user ko kya free reward dena hai? (Temporary profile frames, free non-transferable coins, ya sirf points?)
+
+
+

@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/r/:roomId",
+      "destination": "/join.html"
+    }
+  ]
+}

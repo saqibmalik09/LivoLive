@@ -1,0 +1,41 @@
+# SK Live landing on Coolify VPS (apex + www)
+services:
+  landing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: sklive-landing:local
+    container_name: sklive-landing
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - coolify
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-landing-gzip.compress=true
+      - traefik.http.middlewares.sklive-landing-https.redirectscheme.scheme=https
+      # HTTP → HTTPS (apex + www)
+      - traefik.http.routers.sklive-landing-http.entryPoints=http
+      - traefik.http.routers.sklive-landing-http.rule=Host(`skliveparty.online`) || Host(`www.skliveparty.online`)
+      - traefik.http.routers.sklive-landing-http.middlewares=sklive-landing-https
+      - traefik.http.routers.sklive-landing-http.service=sklive-landing
+      # HTTPS
+      - traefik.http.routers.sklive-landing-https.entryPoints=https
+      - traefik.http.routers.sklive-landing-https.rule=Host(`skliveparty.online`) || Host(`www.skliveparty.online`)
+      - traefik.http.routers.sklive-landing-https.middlewares=sklive-landing-gzip
+      - traefik.http.routers.sklive-landing-https.service=sklive-landing
+      - traefik.http.routers.sklive-landing-https.tls=true
+      - traefik.http.routers.sklive-landing-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-landing.loadbalancer.server.port=3000
+
+networks:
+  coolify:
+    external: true

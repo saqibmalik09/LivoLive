@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.env
+.env.local
+tmp
+scripts
+*.md
+AGENTS.md
+CLAUDE.md
+zuvo.toml
+test_*.js
+check_*.js
+tsconfig.tsbuildinfo

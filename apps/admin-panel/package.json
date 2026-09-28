@@ -1,0 +1,63 @@
+{
+  "name": "sk-live-admin",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "upload-bottom-nav": "node scripts/upload-bottom-nav-icons.mjs",
+    "upload-party-screen": "node scripts/upload-party-screen-bg.mjs",
+    "upload-special-id": "node scripts/upload-special-id-svga.mjs",
+    "apply-hot-cards-migrations": "node scripts/apply-hot-cards-migrations.mjs",
+    "apply-podium-migrations": "node scripts/apply-podium-migrations.mjs",
+    "apply-party-events-migration": "node scripts/apply-party-events-migration.mjs",
+    "apply-cover-images-migration": "node scripts/apply-cover-images-migration.mjs",
+    "apply-date-of-birth-migration": "node scripts/apply-date-of-birth-migration.mjs",
+    "apply-users-profile-policy": "node scripts/apply-users-profile-policy.mjs",
+    "apply-party-events-event-kind": "node scripts/apply-party-events-event-kind.mjs",
+    "apply-level-reward-assets-migration": "node scripts/apply-level-reward-assets-migration.mjs",
+    "apply-lucky-bags-migration": "node scripts/apply-lucky-bags-migration.mjs",
+    "apply-team-pk-migration": "node scripts/apply-team-pk-migration.mjs",
+    "apply-solo-pk-migration": "node scripts/apply-solo-pk-migration.mjs",
+    "seed-party-cp-event": "node scripts/seed-party-cp-event.mjs",
+    "seed-hot-cards": "node scripts/seed-hot-cards.mjs",
+    "seed-ranking-podium": "node scripts/seed-ranking-podium.mjs",
+    "seed-home-banners": "node scripts/seed-home-banners.mjs",
+    "seed-ranking-frames": "node scripts/seed-ranking-frames.mjs",
+    "seed-room-contribution-demo": "node scripts/seed-room-contribution-demo.mjs",
+    "seed-bulk-demo": "node scripts/seed-bulk-demo.mjs",
+    "clear-mock-users": "node scripts/clear-mock-users.mjs",
+    "bulk-upload-room-emojis": "node scripts/bulk-upload-room-mic-emojis.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.14.0",
+    "next": "16.2.6",
+    "pg": "^8.21.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "server-only": "^0.0.1",
+    "sonner": "^2.0.7",
+    "svgaplayerweb": "^2.3.2",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "sharp": "^0.35.2",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

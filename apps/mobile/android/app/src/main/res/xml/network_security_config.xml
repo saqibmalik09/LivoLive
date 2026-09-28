@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Allow HTTP only for Coolify Kong (sslip.io) until TLS is configured. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">51.222.81.97.sslip.io</domain>
+        <domain includeSubdomains="false">51.222.81.97</domain>
+    </domain-config>
+</network-security-config>

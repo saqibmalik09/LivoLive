@@ -1,0 +1,31 @@
+import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import "server-only";
+const KEYLEN = 64;
+export function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(password, salt, KEYLEN).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+export function verifyPassword(password: string, stored: string): boolean {
+  try {
+    const parts = stored.split("$");
+    if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+    const [, salt, hashHex] = parts;
+    if (!salt || !hashHex) return false;
+    const expected = Buffer.from(hashHex, "hex");
+    const actual = scryptSync(password, salt, KEYLEN);
+    if (expected.length !== actual.length) return false;
+    return timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+export function normalizeMasterUsername(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+export function isValidMasterUsername(username: string): boolean {
+  return /^[a-z0-9_]{3,32}$/.test(username);
+}
+export function isValidMasterPassword(password: string): boolean {
+  return password.length >= 8 && password.length <= 128;
+}

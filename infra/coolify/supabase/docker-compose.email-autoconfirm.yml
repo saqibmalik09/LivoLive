@@ -1,0 +1,5 @@
+services:
+  supabase-auth:
+    environment:
+      ENABLE_EMAIL_AUTOCONFIRM: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"

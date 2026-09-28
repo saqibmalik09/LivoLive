@@ -1,0 +1,46 @@
+# SK Live admin on Coolify VPS — https://admin.skliveparty.online
+services:
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    image: sklive-admin:local
+    container_name: sklive-admin
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      ADMIN_PANEL_PASSWORD: ${ADMIN_PANEL_PASSWORD}
+    networks:
+      - coolify
+      - supabase
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-admin-gzip.compress=true
+      - traefik.http.middlewares.sklive-admin-https.redirectscheme.scheme=https
+      - traefik.http.routers.sklive-admin-http.entryPoints=http
+      - traefik.http.routers.sklive-admin-http.rule=Host(`admin.skliveparty.online`)
+      - traefik.http.routers.sklive-admin-http.middlewares=sklive-admin-https
+      - traefik.http.routers.sklive-admin-http.service=sklive-admin
+      - traefik.http.routers.sklive-admin-https.entryPoints=https
+      - traefik.http.routers.sklive-admin-https.rule=Host(`admin.skliveparty.online`)
+      - traefik.http.routers.sklive-admin-https.middlewares=sklive-admin-gzip
+      - traefik.http.routers.sklive-admin-https.service=sklive-admin
+      - traefik.http.routers.sklive-admin-https.tls=true
+      - traefik.http.routers.sklive-admin-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-admin.loadbalancer.server.port=3000
+
+networks:
+  coolify:
+    external: true
+  supabase:
+    external: true
+    name: mnq3vesx0syflb0m0bot3oa2

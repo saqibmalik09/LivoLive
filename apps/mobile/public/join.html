@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LIVO — Join Room</title>
+  <style>
+    body { font-family: system-ui, sans-serif; text-align: center; padding: 48px 24px; background: #1a0a2e; color: #fff; margin: 0; }
+    a.btn { display: inline-block; margin-top: 24px; padding: 14px 28px; background: #ffeb3b; color: #111; border-radius: 28px; text-decoration: none; font-weight: 700; }
+    p.hint { color: #ffffff99; font-size: 14px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>LIVO</h1>
+  <p id="msg">Opening your room…</p>
+  <a id="open" class="btn" href="#">Open in App</a>
+  <p class="hint">If nothing happens, tap the button above.</p>
+  <script>
+    (function () {
+      var parts = location.pathname.split("/").filter(Boolean);
+      var roomId = "";
+      if (parts[0] === "r" && parts[1]) roomId = decodeURIComponent(parts[1]);
+      if (!roomId) {
+        var q = new URLSearchParams(location.search);
+        roomId = q.get("id") || q.get("roomId") || "";
+      }
+      var msg = document.getElementById("msg");
+      var openBtn = document.getElementById("open");
+      if (!roomId) {
+        msg.textContent = "Invalid room link.";
+        openBtn.style.display = "none";
+        return;
+      }
+      var appUrl = "sklive://room/" + roomId;
+      var androidIntent = "intent://room/" + roomId + "#Intent;scheme=sklive;package=com.sklive.app;end";
+      function tryOpen() {
+        var ua = navigator.userAgent || "";
+        if (/android/i.test(ua)) {
+          window.location.href = androidIntent;
+          setTimeout(function () { window.location.href = appUrl; }, 400);
+        } else { window.location.href = appUrl; }
+      }
+      openBtn.href = appUrl;
+      openBtn.onclick = function (e) { e.preventDefault(); tryOpen(); };
+      tryOpen();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+services:
+  supabase-auth:
+    environment:
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: "true"
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: "414833564088-ju3bgj5slnu9rl8k31gb9f4hrp28mvia.apps.googleusercontent.com"
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: "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"
+      GOTRUE_SITE_URL: "https://api.skliveparty.online"
+      GOTRUE_URI_ALLOW_LIST: "https://api.skliveparty.online/**,https://admin.skliveparty.online/**,io.supabase.flutter://login-callback/**,com.sklive.app://login-callback/**"
+      GOTRUE_EXTERNAL_GOOGLE_SKIP_NONCE_CHECK: "true"

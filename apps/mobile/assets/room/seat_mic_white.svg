@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- White half-filled mic for darker seat circles -->
+  <defs>
+    <clipPath id="half">
+      <rect x="32" y="0" width="32" height="64"/>
+    </clipPath>
+  </defs>
+  <rect x="22" y="8" width="20" height="28" rx="10" stroke="#FFFFFF" stroke-width="3.2"/>
+  <rect x="22" y="8" width="20" height="28" rx="10" fill="#FFFFFF" clip-path="url(#half)"/>
+  <path d="M16 30c0 8.837 7.163 16 16 16s16-7.163 16-16" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M32 46v8" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M24 54h16" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+</svg>

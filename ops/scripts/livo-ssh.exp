@@ -1,0 +1,16 @@
+#!/usr/bin/expect -f
+set timeout 45
+set host [lindex $argv 0]
+set user [lindex $argv 1]
+set pwfile [lindex $argv 2]
+set cmd [lindex $argv 3]
+set fp [open $pwfile r]; set pw [string trim [read $fp]]; close $fp
+log_user 1
+spawn ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 $user@$host $cmd
+expect {
+  -re "assword:" { send -- "$pw\r"; exp_continue }
+  -re "yes/no" { send -- "yes\r"; exp_continue }
+  eof
+}
+catch wait result
+exit [lindex $result 3]
