@@ -26,7 +26,63 @@ const SETTINGS_KEYS = [
   'orbit_api_url',
   'orbit_livekit_url',
   'orbit_tenant_api_key',
+  'livekit_url',
+  'livekit_api_key',
+  'livekit_api_secret',
 ];
+
+const LIVEKIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
+
+function b64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/**
+ * Mints a LiveKit join token with Web Crypto — no extra import, no cold-start
+ * network fetch. Mirrors the gateway's src/livekit_voice.js exactly.
+ */
+async function signLiveKitToken(opts: {
+  apiKey: string;
+  apiSecret: string;
+  identity: string;
+  name: string;
+  room: string;
+  canPublish: boolean;
+}): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const enc = new TextEncoder();
+  const segment = (o: unknown) => b64url(enc.encode(JSON.stringify(o)));
+  const data =
+    segment({ alg: 'HS256', typ: 'JWT' }) +
+    '.' +
+    segment({
+      iss: opts.apiKey,
+      sub: opts.identity,
+      jti: `${opts.identity}-${now}`,
+      nbf: now - 10,
+      exp: now + LIVEKIT_TOKEN_TTL_SECONDS,
+      name: opts.name,
+      video: {
+        roomJoin: true,
+        room: opts.room,
+        canPublish: opts.canPublish,
+        canSubscribe: true,
+        canPublishData: true,
+      },
+    });
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(opts.apiSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
+  return `${data}.${b64url(new Uint8Array(sig))}`;
+}
 
 let settingsCache: Record<string, string> | null = null;
 let settingsCacheAt = 0;
@@ -101,7 +157,80 @@ Deno.serve(async (req) => {
     const settings = await loadOrbitSettings(admin);
     mark('settings_ms', t);
 
-    if ((settings.voice_backend || 'zego') !== 'orbit') {
+    const backend = settings.voice_backend || 'zego';
+
+    // Direct LiveKit: mint the token here, no Orbit middleman.
+    if (backend === 'livekit') {
+      const lkUrl =
+        String(settings.livekit_url || '').trim() || Deno.env.get('LIVEKIT_URL') || '';
+      const lkKey =
+        String(settings.livekit_api_key || '').trim() ||
+        Deno.env.get('LIVEKIT_API_KEY') ||
+        '';
+      const lkSecret =
+        String(settings.livekit_api_secret || '').trim() ||
+        Deno.env.get('LIVEKIT_API_SECRET') ||
+        '';
+      if (!lkUrl || !lkKey || !lkSecret) {
+        logTiming('livekit_not_configured', timings, t0, { roomId, openMic });
+        return json(
+          {
+            error: 'livekit_not_configured',
+            detail:
+              'Set livekit_url, livekit_api_key and livekit_api_secret in system_settings',
+            timings,
+          },
+          503,
+        );
+      }
+
+      t = Date.now();
+      const [lkSeat, lkRoom] = await Promise.all([
+        admin
+          .from('room_seats')
+          .select('seat_index')
+          .eq('room_id', roomId)
+          .eq('user_id', userData.user.id)
+          .maybeSingle(),
+        admin.from('rooms').select('id').eq('id', roomId).maybeSingle(),
+      ]);
+      mark('seat_lookup_ms', t);
+
+      if (!lkRoom.data) {
+        logTiming('room_not_found', timings, t0, { roomId, openMic });
+        return json({ error: 'room_not_found', timings }, 404);
+      }
+
+      // Publish comes from the durable seat row only — never the client's claim.
+      const lkOnSeat = Boolean(lkSeat.data);
+      const lkRoomName = `sklive_${roomId.replace(/-/g, '')}`;
+
+      t = Date.now();
+      const token = await signLiveKitToken({
+        apiKey: lkKey,
+        apiSecret: lkSecret,
+        identity: userData.user.id,
+        name: String(body.name || userData.user.id),
+        room: lkRoomName,
+        canPublish: lkOnSeat,
+      });
+      mark('livekit_sign_ms', t);
+
+      logTiming('livekit_ok', timings, t0, { roomId, openMic });
+      return json({
+        token,
+        livekit_url: lkUrl,
+        livekit_room: lkRoomName,
+        orbit_room_id: lkRoomName,
+        can_publish: lkOnSeat,
+        role: lkOnSeat ? 'speaker' : 'listener',
+        on_seat: lkOnSeat,
+        backend: 'livekit',
+        timings,
+      });
+    }
+
+    if (backend !== 'orbit') {
       logTiming('backend_not_orbit', timings, t0, { roomId, openMic });
       return json({ error: 'voice_backend_not_orbit', timings }, 400);
     }
