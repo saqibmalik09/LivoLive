@@ -3,12 +3,7 @@ import { ArrowLeft, Mic2 } from "lucide-react";
 import { loadVoiceBackendSettings } from "./actions";
 import { VoiceBackendForm } from "./VoiceBackendForm";
 export default async function VoiceBackendSettingsPage() {
-  const { saveVoiceBackendSettings, loadVoiceBackendSettings } = await import("./actions");
-  let settings = await loadVoiceBackendSettings();
-  try {
-    await saveVoiceBackendSettings(settings);
-    settings = await loadVoiceBackendSettings();
-  } catch {}
+  const settings = await loadVoiceBackendSettings();
   return (
     <div className="space-y-10 pb-32">
       <Link
@@ -27,9 +22,11 @@ export default async function VoiceBackendSettingsPage() {
           </h1>
         </div>
         <p className="max-w-2xl text-white/55">
-          Keep <strong className="text-white/80">Zego</strong> as production default, or switch the
-          app to <strong className="text-white/80">Orbit Voice</strong> (our LiveKit VM) for
-          testing. Zego code stays in the app — this only selects which stack rooms use.
+          Selects which stack rooms use. <strong className="text-white/80">Orbit Voice</strong>
+          reaches LiveKit through the Orbit API; <strong className="text-white/80">LiveKit
+          (direct)</strong> mints tokens in our own gateway with no middleman.
+          <strong className="text-white/80">Zego</strong> is the legacy engine. Switching takes
+          effect on the next room join — no app release needed.
         </p>
       </header>
 

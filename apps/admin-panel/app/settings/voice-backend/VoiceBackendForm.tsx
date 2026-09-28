@@ -1,12 +1,29 @@
 "use client";
 import { useState } from "react";
-import { Loader2, Save, CheckCircle2 } from "lucide-react";
-import { saveVoiceBackendSettings, type VoiceBackendSettings } from "./actions";
+import { Loader2, Save, CheckCircle2, ShieldCheck } from "lucide-react";
+import {
+  saveVoiceBackendSettings,
+  type VoiceBackendSettings,
+  type VoiceBackendId,
+} from "./actions";
+
+const OPTIONS: { id: VoiceBackendId; title: string; desc: string }[] = [
+  { id: "zego", title: "Zego", desc: "Legacy voice engine" },
+  { id: "orbit", title: "Orbit Voice", desc: "LiveKit via Orbit API" },
+  { id: "livekit", title: "LiveKit (direct)", desc: "No middleman — tokens minted here" },
+];
+
 export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings }) {
-  const [backend, setBackend] = useState<"zego" | "orbit">(initial.voice_backend);
+  const [backend, setBackend] = useState<VoiceBackendId>(initial.voice_backend);
+  const [livekitUrl, setLivekitUrl] = useState(initial.livekit_url);
+  const [livekitKey, setLivekitKey] = useState(initial.livekit_api_key);
+  const [livekitSecret, setLivekitSecret] = useState("");
   const [loading, setLoading] = useState(false);
   const [ok, setOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const secretStored = Boolean(initial.livekit_secret_set);
+
   async function onSave() {
     setLoading(true);
     setError(null);
@@ -15,15 +32,20 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
       voice_backend: backend,
       orbit_api_url: initial.orbit_api_url,
       orbit_livekit_url: initial.orbit_livekit_url,
+      livekit_url: livekitUrl,
+      livekit_api_key: livekitKey,
+      livekit_api_secret: livekitSecret,
     });
     setLoading(false);
     if (!res.success) {
       setError(res.error || "Save failed");
       return;
     }
+    setLivekitSecret("");
     setOk(true);
     setTimeout(() => setOk(false), 2000);
   }
+
   return (
     <div className="glass-card space-y-8 p-8">
       <div className="space-y-3">
@@ -31,12 +53,7 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
           Active voice backend
         </label>
         <div className="flex flex-wrap gap-3">
-          {(
-            [
-              { id: "zego" as const, title: "Zego", desc: "Production voice engine" },
-              { id: "orbit" as const, title: "Orbit Voice", desc: "Powered by Almohsin Dev" },
-            ] as const
-          ).map((opt) => {
+          {OPTIONS.map((opt) => {
             const selected = backend === opt.id;
             return (
               <button
@@ -56,6 +73,57 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
           })}
         </div>
       </div>
+
+      {backend === "livekit" && (
+        <div className="space-y-5 rounded-2xl border border-cyan-400/20 bg-cyan-500/5 p-6">
+          <p className="text-xs text-white/50">
+            Tokens are minted by our own gateway using this key pair. The secret is stored
+            server-side and is never sent back to this page.
+          </p>
+
+          <div className="space-y-2">
+            <label className="text-xs font-black uppercase tracking-widest text-white/50">
+              LiveKit URL
+            </label>
+            <input
+              value={livekitUrl}
+              onChange={(e) => setLivekitUrl(e.target.value)}
+              placeholder="wss://voice.skliveparty.online"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/60"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-black uppercase tracking-widest text-white/50">
+              API key
+            </label>
+            <input
+              value={livekitKey}
+              onChange={(e) => setLivekitKey(e.target.value)}
+              placeholder="APIxxxxxxxxxxxx"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/60"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-white/50">
+              API secret
+              {secretStored && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                  <ShieldCheck size={11} /> stored
+                </span>
+              )}
+            </label>
+            <input
+              type="password"
+              value={livekitSecret}
+              onChange={(e) => setLivekitSecret(e.target.value)}
+              placeholder={secretStored ? "Leave blank to keep the stored secret" : "Paste the API secret"}
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/60"
+            />
+          </div>
+        </div>
+      )}
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 

@@ -1,4 +1,5 @@
 const db = require("./db");
+const livekitVoice = require("./livekit_voice");
 const FETCH_TIMEOUT_MS = 8e3;
 const SETTINGS_TTL_MS = 6e4;
 const SETTINGS_KEYS = [
@@ -6,6 +7,9 @@ const SETTINGS_KEYS = [
   "orbit_api_url",
   "orbit_livekit_url",
   "orbit_tenant_api_key",
+  "livekit_url",
+  "livekit_api_key",
+  "livekit_api_secret",
 ];
 let settingsCache = null;
 let settingsCacheAt = 0;
@@ -168,7 +172,17 @@ async function mintVoiceToken({
   t = Date.now();
   const settings = await loadOrbitSettings();
   mark("settings_ms", t);
-  if ((settings.voice_backend || "zego") !== "orbit") {
+  const backend = settings.voice_backend || "zego";
+  if (backend === "livekit") {
+    return await livekitVoice.mintVoiceToken({
+      userId: userId,
+      userName: userName,
+      payload: payload,
+      settings: settings,
+      timings: timings,
+    });
+  }
+  if (backend !== "orbit") {
     return {
       ok: false,
       error: "voice_backend_not_orbit",
