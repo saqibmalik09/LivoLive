@@ -12,6 +12,8 @@ export type VoiceBackendSettings = {
   livekit_api_key: string;
   /** Never populated on load. Blank on save means "keep the stored secret". */
   livekit_api_secret: string;
+  /** Comma-separated user ids forced onto LiveKit regardless of the active backend. */
+  livekit_test_user_ids: string;
   /** Read-only indicator for the UI. */
   livekit_secret_set?: boolean;
 };
@@ -48,6 +50,7 @@ export async function loadVoiceBackendSettings(): Promise<VoiceBackendSettings> 
     "livekit_url",
     "livekit_api_key",
     "livekit_api_secret",
+    "livekit_test_user_ids",
   ];
   const { data, error } = await supabaseAdmin
     .from("system_settings")
@@ -63,6 +66,7 @@ export async function loadVoiceBackendSettings(): Promise<VoiceBackendSettings> 
     livekit_api_key: map.livekit_api_key || "",
     // The secret is never sent to the browser.
     livekit_api_secret: "",
+    livekit_test_user_ids: map.livekit_test_user_ids || "",
     livekit_secret_set: Boolean(map.livekit_api_secret),
   };
 }
@@ -113,6 +117,15 @@ export async function saveVoiceBackendSettings(input: VoiceBackendSettings) {
       "livekit_api_key",
       input.livekit_api_key.trim(),
       "LiveKit API key. Used when voice_backend=livekit.",
+    );
+    await upsertSetting(
+      "livekit_test_user_ids",
+      input.livekit_test_user_ids
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join(","),
+      "User ids forced onto the LiveKit backend regardless of voice_backend. For testing a new build against production without moving everyone.",
     );
     // Blank secret means keep whatever is stored — the browser never receives it.
     if (input.livekit_api_secret.trim()) {

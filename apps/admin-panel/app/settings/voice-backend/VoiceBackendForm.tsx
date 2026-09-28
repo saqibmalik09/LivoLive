@@ -18,6 +18,7 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
   const [livekitUrl, setLivekitUrl] = useState(initial.livekit_url);
   const [livekitKey, setLivekitKey] = useState(initial.livekit_api_key);
   const [livekitSecret, setLivekitSecret] = useState("");
+  const [testIds, setTestIds] = useState(initial.livekit_test_user_ids);
   const [loading, setLoading] = useState(false);
   const [ok, setOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
       livekit_url: livekitUrl,
       livekit_api_key: livekitKey,
       livekit_api_secret: livekitSecret,
+      livekit_test_user_ids: testIds,
     });
     setLoading(false);
     if (!res.success) {
@@ -124,6 +126,23 @@ export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings })
           </div>
         </div>
       )}
+
+      <div className="space-y-2 rounded-2xl border border-amber-400/20 bg-amber-500/5 p-6">
+        <label className="text-xs font-black uppercase tracking-widest text-white/50">
+          LiveKit test accounts
+        </label>
+        <p className="text-xs text-white/50">
+          These user ids always get LiveKit, whatever the active backend is. Use this to test a
+          new build against production without moving everyone onto it. Comma-separated; leave
+          blank for none.
+        </p>
+        <input
+          value={testIds}
+          onChange={(e) => setTestIds(e.target.value)}
+          placeholder="11111111-2222-3333-4444-555555555555, ..."
+          className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none focus:border-amber-400/60"
+        />
+      </div>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 

@@ -29,6 +29,7 @@ const SETTINGS_KEYS = [
   'livekit_url',
   'livekit_api_key',
   'livekit_api_secret',
+  'livekit_test_user_ids',
 ];
 
 const LIVEKIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
@@ -157,7 +158,15 @@ Deno.serve(async (req) => {
     const settings = await loadOrbitSettings(admin);
     mark('settings_ms', t);
 
-    const backend = settings.voice_backend || 'zego';
+    // Allow-list lets specific accounts run on LiveKit while everyone else stays
+    // on the current backend — so a new build can be tested against production
+    // without moving live users onto an engine their app version lacks.
+    const livekitTestIds = String(settings.livekit_test_user_ids || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const forcedLiveKit = livekitTestIds.includes(userData.user.id);
+    const backend = forcedLiveKit ? 'livekit' : settings.voice_backend || 'zego';
 
     // Direct LiveKit: mint the token here, no Orbit middleman.
     if (backend === 'livekit') {

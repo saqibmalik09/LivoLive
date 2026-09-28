@@ -10,6 +10,7 @@ const SETTINGS_KEYS = [
   "livekit_url",
   "livekit_api_key",
   "livekit_api_secret",
+  "livekit_test_user_ids",
 ];
 let settingsCache = null;
 let settingsCacheAt = 0;
@@ -172,7 +173,18 @@ async function mintVoiceToken({
   t = Date.now();
   const settings = await loadOrbitSettings();
   mark("settings_ms", t);
-  const backend = settings.voice_backend || "zego";
+  // Allow-list lets specific accounts run on LiveKit while everyone else stays
+  // on the current backend — so a new build can be tested against production
+  // without moving live users onto an engine their app version lacks.
+  const livekitTestIds = String(settings.livekit_test_user_ids || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const forcedLiveKit = livekitTestIds.includes(String(userId));
+  const backend = forcedLiveKit ? "livekit" : settings.voice_backend || "zego";
+  if (forcedLiveKit) {
+    console.log(`[voice] user=${userId} forced to livekit by test allow-list`);
+  }
   if (backend === "livekit") {
     return await livekitVoice.mintVoiceToken({
       userId: userId,
