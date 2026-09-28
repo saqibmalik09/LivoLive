@@ -29,6 +29,9 @@ dependencies:
   # VOICE / AUDIO ENGINE — Orbit
   # ════════════════════════════════════════════════
   orbit_voice: ^0.3.0                          # DeepFilterNet denoise on by default
+  # Direct LiveKit path (voice_backend=livekit). Pinned to the version the real
+  # orbit_voice resolved transitively, so the WebRTC stack stays identical.
+  livekit_client: 2.11.0
 
   # ════════════════════════════════════════════════
   # STATE MANAGEMENT

@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:orbit_voice/orbit_voice.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
+import 'package:sk_live/core/services/livekit_voice_engine.dart';
+import 'package:sk_live/core/services/voice_engine.dart';
 import 'package:sk_live/core/util/app_constants.dart';
 import 'package:sk_live/features/home/services/room_realtime_socket.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,7 +13,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class OrbitVoiceSessionService {
   OrbitVoiceSessionService._();
 
-  static final OrbitEngine _e = OrbitEngine.instance;
+  static bool _liveKitMode = false;
+
+  /// True once the server has told us this session runs on direct LiveKit.
+  static bool get isLiveKitBackend => _liveKitMode;
+
+  /// Which engine backs every call below. Selected from the `backend` field the
+  /// server returns with each voice session, so switching
+  /// system_settings.voice_backend moves the app over with no app release.
+  static VoiceEngine get _e =>
+      _liveKitMode ? LiveKitVoiceEngine.instance : OrbitEngineAdapter.instance;
 
   static String? _cachedOrbitRoomId;
   static String? _cachedSkLiveRoomId;
@@ -33,7 +44,9 @@ class OrbitVoiceSessionService {
   static void _wireFetcher() {
     if (_fetcherWired) return;
     _fetcherWired = true;
-    _e.sessionFetcher =
+    // Wire both engines: the backend can change between sessions.
+    OrbitEngineAdapter.instance.sessionFetcher =
+        LiveKitVoiceEngine.instance.sessionFetcher =
         ({
           required String roomId,
           required bool openMic,
@@ -364,6 +377,17 @@ class OrbitVoiceSessionService {
       } catch (e) {
         debugPrint('[ORBIT] edge orbit-voice-session failed: $e');
         return null;
+      }
+    }
+
+    // The server names the stack this session belongs to; honour it before any
+    // engine call, so a backend switch takes effect on the very next join.
+    final backendName = map['backend']?.toString();
+    if (backendName != null && backendName.isNotEmpty) {
+      final wantsLiveKit = backendName == 'livekit';
+      if (wantsLiveKit != _liveKitMode) {
+        debugPrint('[VOICE] backend -> $backendName');
+        _liveKitMode = wantsLiveKit;
       }
     }
 
