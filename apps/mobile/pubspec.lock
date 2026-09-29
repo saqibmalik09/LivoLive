@@ -1596,13 +1596,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
-  orbit_voice:
-    dependency: "direct main"
-    description:
-      path: "../../orbit-voice/packages/orbit_voice"
-      relative: true
-    source: path
-    version: "0.4.0-stub.1"
   package_config:
     dependency: transitive
     description:

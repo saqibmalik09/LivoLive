@@ -28,7 +28,6 @@ dependencies:
   # ════════════════════════════════════════════════
   # VOICE / AUDIO ENGINE — Orbit
   # ════════════════════════════════════════════════
-  orbit_voice: ^0.3.0                          # DeepFilterNet denoise on by default
   # Direct LiveKit path (voice_backend=livekit). Pinned to the version the real
   # orbit_voice resolved transitively, so the WebRTC stack stays identical.
   livekit_client: 2.11.0
@@ -218,9 +217,5 @@ flutter:
   #         weight: 800
 
 dependency_overrides:
-  # Same local DeepFilterNet studio build Rave uses — pub 0.3.0 denoise
-  # does not match the working path package (0.4.0).
-  orbit_voice:
-    path: ../../orbit-voice/packages/orbit_voice
-  # orbit_voice / its stack need this pin (protobuf ^6). Do not pin 4.2.0.
+  # livekit_client's stack needs this pin (protobuf ^6). Do not pin 4.2.0.
   flutter_webrtc: 1.6.0

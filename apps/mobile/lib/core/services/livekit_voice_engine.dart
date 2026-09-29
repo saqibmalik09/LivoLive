@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
-import 'package:orbit_voice/orbit_voice.dart';
+import 'package:sk_live/core/services/voice_types.dart';
 
 import 'voice_engine.dart';
 
