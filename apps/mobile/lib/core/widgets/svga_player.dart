@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svga/flutter_svga.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 
 class RaveSVGAPlayer extends StatefulWidget {
   final String resUrl;
@@ -87,14 +88,16 @@ class RaveSVGAPlayerState extends State<RaveSVGAPlayer>
 
   Future<void> _loadAnimation() async {
     try {
-      final videoItem;
+      final MovieEntity videoItem;
       if (widget.resUrl.startsWith('assets/')) {
         final data = await rootBundle.load(widget.resUrl);
         videoItem = await SVGAParser.shared.decodeFromBuffer(
           data.buffer.asUint8List(),
         );
       } else {
-        videoItem = await SVGAParser.shared.decodeFromURL(widget.resUrl);
+        // Cached: decodeFromURL re-downloads and re-parses on every play, which
+        // is why gift animations arrived late and sometimes not at all.
+        videoItem = await SvgaCache.load(widget.resUrl);
       }
       if (mounted && _controller != null) {
         setState(() {
@@ -110,8 +113,6 @@ class RaveSVGAPlayerState extends State<RaveSVGAPlayer>
           }
         });
         widget.onLoaded?.call();
-      } else {
-        videoItem.dispose();
       }
     } catch (e) {
       debugPrint('Error loading SVGA: $e');

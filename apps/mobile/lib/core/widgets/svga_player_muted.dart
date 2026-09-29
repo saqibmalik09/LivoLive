@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svga/flutter_svga.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 
 class SVGAPlayerMuted extends StatefulWidget {
   final String resUrl;
@@ -36,14 +37,14 @@ class _SVGAPlayerMutedState extends State<SVGAPlayerMuted>
 
   Future<void> _loadAnimation() async {
     try {
-      final videoItem = await SVGAParser.shared.decodeFromURL(widget.resUrl);
+      // Cached: see SvgaCache — decodeFromURL refetches on every play.
+      final videoItem = await SvgaCache.load(widget.resUrl);
       if (mounted && _controller != null) {
         setState(() {
           _controller!.videoItem = videoItem;
           _controller!.repeat();
         });
       } else {
-        videoItem.dispose();
       }
     } catch (e) {
       debugPrint('Error loading SVGA: $e');
