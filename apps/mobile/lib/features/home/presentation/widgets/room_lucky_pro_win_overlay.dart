@@ -1,3 +1,5 @@
+import 'package:sk_live/core/widgets/app_network_image.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
@@ -315,21 +317,32 @@ class _Avatar extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipOval(
-        child: avatarUrl != null && avatarUrl!.isNotEmpty
-            ? CachedNetworkImage(
-                imageUrl: avatarUrl!,
-                fit: BoxFit.cover,
-                errorWidget: (_, __, ___) => const ColoredBox(
-                  color: Colors.black45,
-                  child: Icon(Icons.person, color: Colors.white70, size: 36),
-                ),
-              )
-            : const ColoredBox(
-                color: Colors.black45,
-                child: Icon(Icons.person, color: Colors.white70, size: 36),
-              ),
-      ),
+      child: ClipOval(child: _buildAvatar()),
     );
   }
+
+  Widget _buildAvatar() {
+    // The url arrives raw from message metadata or the users table, so it has
+    // to go through MediaUrlUtil like every other avatar in the app. This
+    // widget handed it straight to CachedNetworkImage, so any avatar still on
+    // the old storage host failed and fell through to the person icon — the
+    // placeholder showing inside the win ring instead of the user's picture.
+    final resolved = MediaUrlUtil.nullableMediaUrl(avatarUrl);
+    if (resolved == null || resolved.isEmpty) return _fallback();
+    final transformPx = (size * 3).round();
+    return AppNetworkImage(
+      imageUrl: resolved,
+      fit: BoxFit.cover,
+      transformWidth: transformPx,
+      transformHeight: transformPx,
+      memCacheWidth: transformPx,
+      memCacheHeight: transformPx,
+      errorWidget: (_, _, _) => _fallback(),
+    );
+  }
+
+  Widget _fallback() => const ColoredBox(
+    color: Colors.black45,
+    child: Icon(Icons.person, color: Colors.white70, size: 36),
+  );
 }
