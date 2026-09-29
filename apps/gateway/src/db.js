@@ -87,8 +87,15 @@ async function seatClaim({
   const conflictWhere = bypassLock
     ? ` WHERE (room_seats.user_id IS NULL\n              OR room_seats.user_id = EXCLUDED.user_id)`
     : ` WHERE room_seats.is_locked = false\n         AND (room_seats.user_id IS NULL\n              OR room_seats.user_id = EXCLUDED.user_id)`;
+  // The claim must land BEFORE the old seat is released. Previously the DELETE
+  // sat in its own CTE, and a data-modifying CTE always runs — so a rejected
+  // claim (seat taken or locked) still vacated the seat the user was already
+  // on, leaving them on no seat while the UI still showed them seated. That
+  // mismatch is what surfaced as a duplicated user plus an error on mic move.
+  // Referencing `ins` from `cleared` makes the delete conditional on the insert
+  // actually returning a row.
   const { rows: rows } = await query(
-    `WITH cleared AS (\n       DELETE FROM room_seats\n       WHERE room_id = $1 AND user_id = $2 AND seat_index <> $3\n     )\n     INSERT INTO room_seats (room_id, user_id, seat_index, is_muted, is_locked)\n     VALUES ($1, $2, $3, $4, false)\n     ON CONFLICT (room_id, seat_index)\n     DO UPDATE SET user_id = EXCLUDED.user_id, is_muted = EXCLUDED.is_muted,\n                   is_locked = false, updated_at = now()\n    ${conflictWhere}\n     RETURNING id, room_id, user_id, seat_index, is_muted, is_locked`,
+    `WITH ins AS (\n       INSERT INTO room_seats (room_id, user_id, seat_index, is_muted, is_locked)\n       VALUES ($1, $2, $3, $4, false)\n       ON CONFLICT (room_id, seat_index)\n       DO UPDATE SET user_id = EXCLUDED.user_id, is_muted = EXCLUDED.is_muted,\n                     is_locked = false, updated_at = now()\n      ${conflictWhere}\n       RETURNING id, room_id, user_id, seat_index, is_muted, is_locked\n     ), cleared AS (\n       DELETE FROM room_seats\n       WHERE room_id = $1 AND user_id = $2 AND seat_index <> $3\n         AND EXISTS (SELECT 1 FROM ins)\n       RETURNING seat_index\n     )\n     SELECT ins.*, (SELECT seat_index FROM cleared LIMIT 1) AS vacated_seat_index\n     FROM ins`,
     [roomId, userId, seatIndex, !!isMuted],
   );
   if (rows[0]) return rows[0];
