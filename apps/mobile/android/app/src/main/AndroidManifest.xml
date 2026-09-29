@@ -47,9 +47,13 @@
     <!-- 5. Remove Advertising ID (Required for Google Play if answering NO to Ad ID declaration) -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove"/>
 
+    <!-- largeHeap: media-heavy app — decoded SVGA animations, gift art and
+         avatars all sit in memory. Without it Android reclaims the process
+         while backgrounded, so reopening cold-starts instead of resuming. -->
     <application
         android:label="LIVO"
         android:name="${applicationName}"
+        android:largeHeap="true"
         android:icon="@mipmap/launcher_icon"
         android:allowBackup="false"
         android:fullBackupContent="false"

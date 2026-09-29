@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -62,6 +63,11 @@ void main() async {
 
   PaintingBinding.instance.imageCache.maximumSizeBytes = 60 << 20;
   PaintingBinding.instance.imageCache.maximumSize = 200;
+
+  // Decoded SVGA animations are the app's other large memory consumer and sit
+  // outside Flutter's image cache, so release them when the OS asks rather than
+  // letting them contribute to the process being killed while backgrounded.
+  WidgetsBinding.instance.addObserver(_MemoryPressureObserver());
 
   await Hive.initFlutter();
   await HiveCacheService.init();
@@ -191,5 +197,14 @@ class SkLiveApp extends ConsumerWidget {
         );
       },
     );
+  }
+}
+
+/// Drops cached SVGA animations when the system reports memory pressure.
+class _MemoryPressureObserver extends WidgetsBindingObserver {
+  @override
+  void didHaveMemoryPressure() {
+    SvgaCache.evictMemory();
+    debugPrint('[memory] pressure — evicted cached SVGA animations');
   }
 }
