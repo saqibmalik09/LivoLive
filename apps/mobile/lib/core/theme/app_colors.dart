@@ -29,7 +29,11 @@ class AppColors {
 
   static const Color diamondDark = Color(0xFF0288D1);
 
-  static const Color background = Color(0xFFFFF8EE);
+  // Brightened from 0xFFFFF8EE. The home screen was never dark — it is a warm
+  // cream — but the heavy yellow cast read as dull/low brightness. This keeps
+  // the warmth while lifting it, and stays a shade off pure white so white
+  // cards (surface) still separate from the background.
+  static const Color background = Color(0xFFFFFCF6);
 
   static const Color surface = Color(0xFFFFFFFF);
 

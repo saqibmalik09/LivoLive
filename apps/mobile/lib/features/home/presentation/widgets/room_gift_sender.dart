@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
@@ -271,7 +273,15 @@ Future<RoomGiftSendOutcome> sendRoomGift({
       );
 
       if (persistMessage) {
-        await persistRoomGiftMessage(supabase, messageInsert);
+        // Same as the gateway path: the gift has already settled, this row is
+        // only chat history, so it must not hold up the send.
+        unawaited(
+          persistRoomGiftMessage(supabase, messageInsert).catchError((
+            Object e,
+          ) {
+            debugPrint('[gift] chat row persist failed: $e');
+          }),
+        );
       }
 
       final metadata = messageInsert['metadata'] as Map<String, dynamic>;
@@ -470,7 +480,17 @@ Future<List<RoomGiftSendOutcome>> sendRoomGiftsViaGateway({
               : <String, dynamic>{},
         };
         if (persistMessage) {
-          await persistRoomGiftMessage(supabase, messageInsert);
+          // Fire and forget: the gift is already settled and broadcast by this
+          // point, and this row is only chat history. Awaiting it once per
+          // recipient made sending to several seats visibly slow, and a failed
+          // insert used to abort the whole send.
+          unawaited(
+            persistRoomGiftMessage(supabase, messageInsert).catchError((
+              Object e,
+            ) {
+              debugPrint('[gift] chat row persist failed: $e');
+            }),
+          );
         }
       }
 
