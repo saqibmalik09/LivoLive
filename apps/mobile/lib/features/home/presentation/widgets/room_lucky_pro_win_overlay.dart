@@ -228,7 +228,11 @@ class _RoomLuckyProWinOverlayState extends State<RoomLuckyProWinOverlay>
                                       offset: const Offset(0, -8),
                                       child: _Avatar(
                                         avatarUrl: widget.avatarUrl,
-                                        size: 56,
+                                        // Sized from the ring rather than fixed
+                                        // at 56, which left the picture small
+                                        // inside a 360-480pt ring. Scales with
+                                        // the overlay on any screen size.
+                                        size: (boxH * 0.26).clamp(88.0, 120.0),
                                       ),
                                     ),
                                     const SizedBox(height: 8),
@@ -341,8 +345,8 @@ class _Avatar extends StatelessWidget {
     );
   }
 
-  Widget _fallback() => const ColoredBox(
+  Widget _fallback() => ColoredBox(
     color: Colors.black45,
-    child: Icon(Icons.person, color: Colors.white70, size: 36),
+    child: Icon(Icons.person, color: Colors.white70, size: size * 0.5),
   );
 }
