@@ -32,6 +32,17 @@ class LiveKitVoiceEngine implements VoiceEngine {
   void Function(String reason)? _onTransportLost;
   void Function(Map<String, double> levels)? _onSpeakerLevels;
 
+  /// Identities reported as speaking on the previous event, so we can send an
+  /// explicit zero when they stop. The UI ignores an empty map, so silence has
+  /// to be signalled per-identity or the wave would stay stuck on.
+  Set<String> _lastSpeakers = <String>{};
+
+  /// livekit_client reports audioLevel as 0.0-1.0; the room UI's thresholds
+  /// (speak at 3.0, loud at 28.0) are on the 0-100 scale the previous voice
+  /// stack produced. Without this the wave never animates: ordinary speech
+  /// reads about 0.3 and never crosses the speaking threshold.
+  static const double _audioLevelScale = 100.0;
+
   @override
   OrbitSessionFetcher? sessionFetcher;
 
@@ -134,9 +145,16 @@ class LiveKitVoiceEngine implements VoiceEngine {
       ..on<lk.ActiveSpeakersChangedEvent>((e) {
         final handler = _onSpeakerLevels;
         if (handler == null) return;
-        handler(<String, double>{
-          for (final p in e.speakers) p.identity: p.audioLevel,
-        });
+        final levels = <String, double>{
+          for (final p in e.speakers)
+            p.identity: p.audioLevel * _audioLevelScale,
+        };
+        // Anyone who was speaking and no longer is gets an explicit zero.
+        for (final identity in _lastSpeakers) {
+          levels.putIfAbsent(identity, () => 0.0);
+        }
+        _lastSpeakers = e.speakers.map((p) => p.identity).toSet();
+        if (levels.isNotEmpty) handler(levels);
       });
 
     _room = room;
@@ -162,6 +180,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _room = null;
     _events = null;
     _appRoomId = null;
+    _lastSpeakers = <String>{};
     try {
       await events?.dispose();
       await room?.disconnect();
