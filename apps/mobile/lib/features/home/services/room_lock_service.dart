@@ -88,7 +88,9 @@ Future<bool> ensureRoomUnlockedForEntry(
   try {
     final row = await Supabase.instance.client
         .from('rooms')
-        .select('id, host_id, is_locked, room_password')
+        // Deliberately does not select room_password: the device has no
+        // legitimate need for it, and verification happens server-side.
+        .select('id, host_id, is_locked')
         .eq('id', roomId)
         .maybeSingle();
     if (row != null) latest.addAll(Map<String, dynamic>.from(row));
@@ -112,6 +114,11 @@ Future<bool> ensureRoomUnlockedForEntry(
   );
   if (pass == null || pass.isEmpty) return false;
 
+  // Verification is server-side only. There used to be a fallback here that
+  // compared the typed password against room_password fetched by the client —
+  // which both required shipping the password to the device and let a tampered
+  // client unlock any room. If the check cannot be performed, entry is denied.
+  var message = 'Wrong password';
   try {
     final ok = await Supabase.instance.client.rpc(
       'verify_room_password',
@@ -121,20 +128,14 @@ Future<bool> ensureRoomUnlockedForEntry(
       _markRoomUnlocked(roomId);
       return true;
     }
-  } catch (_) {
-    final stored = latest['room_password']?.toString().trim() ?? '';
-    if (stored.isNotEmpty && stored == pass) {
-      _markRoomUnlocked(roomId);
-      return true;
-    }
+  } catch (e) {
+    debugPrint('[room_lock] verify_room_password failed: $e');
+    message = 'Could not verify the password. Please try again.';
   }
 
   if (context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Wrong password'),
-        backgroundColor: Colors.redAccent,
-      ),
+      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
     );
   }
   return false;
@@ -214,9 +215,16 @@ class _RoomLockPasswordDialogState extends State<_RoomLockPasswordDialog> {
     super.dispose();
   }
 
+  String? _error;
+
   void _submit() {
     final pass = _controller.text.trim();
-    if (widget.requireNonEmpty && pass.length < 4) return;
+    if (widget.requireNonEmpty && pass.length < 4) {
+      // Used to return silently, so tapping Join with a short code looked like
+      // the button was broken.
+      setState(() => _error = 'Password must be 4-6 digits');
+      return;
+    }
     Navigator.pop(context, pass);
   }
 
@@ -233,17 +241,22 @@ class _RoomLockPasswordDialogState extends State<_RoomLockPasswordDialog> {
         inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         maxLength: 6,
         style: const TextStyle(color: Colors.white, letterSpacing: 4),
-        decoration: const InputDecoration(
-          hintText: '4–6 digit password',
-          hintStyle: TextStyle(color: Colors.white38, letterSpacing: 0),
-          counterStyle: TextStyle(color: Colors.white38),
-          enabledBorder: OutlineInputBorder(
+        decoration: InputDecoration(
+          hintText: '4-6 digit password',
+          hintStyle: const TextStyle(color: Colors.white38, letterSpacing: 0),
+          counterStyle: const TextStyle(color: Colors.white38),
+          enabledBorder: const OutlineInputBorder(
             borderSide: BorderSide(color: Colors.white24),
           ),
-          focusedBorder: OutlineInputBorder(
+          focusedBorder: const OutlineInputBorder(
             borderSide: BorderSide(color: Colors.amber),
           ),
+          errorText: _error,
+          errorStyle: const TextStyle(color: Colors.redAccent),
         ),
+        onChanged: (_) {
+          if (_error != null) setState(() => _error = null);
+        },
         onSubmitted: (_) => _submit(),
       ),
       actions: [

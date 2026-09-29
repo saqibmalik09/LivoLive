@@ -22,8 +22,13 @@ import 'package:path_provider/path_provider.dart';
 class SvgaCache {
   SvgaCache._();
 
-  /// Decoded animations hold bitmaps, so this stays deliberately small.
-  static const int _maxMemoryEntries = 8;
+  /// Sized to comfortably exceed one screenful. The shop grid shows around a
+  /// dozen animated tiles at once (the largest category has 70 items, 50 of
+  /// them animated), so a cache of 8 evicted entries that were still on screen
+  /// and forced constant re-decoding while scrolling. Decoded animations hold
+  /// bitmaps, so this is still bounded — and main.dart drops the whole cache
+  /// when the OS reports memory pressure.
+  static const int _maxMemoryEntries = 20;
 
   static final LinkedHashMap<String, MovieEntity> _memory =
       LinkedHashMap<String, MovieEntity>();
