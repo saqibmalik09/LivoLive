@@ -1,3 +1,5 @@
+import 'package:sk_live/core/widgets/app_network_image.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
@@ -393,6 +395,14 @@ class _AvatarRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Run the url through MediaUrlUtil like every other avatar in the app. This
+    // widget used to hand the raw value straight to CachedNetworkImage, so any
+    // avatar still pointing at the old storage host failed to load and fell
+    // through to the dark placeholder — the "black hole" in the lucky gift
+    // animation, with no profile picture in it.
+    final resolved = MediaUrlUtil.nullableMediaUrl(avatarUrl);
+    final transformPx = (size * 3).round();
+
     return Container(
       width: size,
       height: size,
@@ -402,15 +412,15 @@ class _AvatarRing extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFFD54F), width: 1.5),
       ),
       child: ClipOval(
-        child: avatarUrl != null && avatarUrl!.isNotEmpty
-            ? CachedNetworkImage(
-                imageUrl: avatarUrl!,
+        child: resolved != null && resolved.isNotEmpty
+            ? AppNetworkImage(
+                imageUrl: resolved,
                 fit: BoxFit.cover,
-                placeholder: (context, url) => const ColoredBox(
-                  color: Colors.white10,
-                  child: Icon(Icons.person, color: Colors.white54, size: 16),
-                ),
-                errorWidget: (context, url, error) => const ColoredBox(
+                transformWidth: transformPx,
+                transformHeight: transformPx,
+                memCacheWidth: transformPx,
+                memCacheHeight: transformPx,
+                errorWidget: (_, _, _) => const ColoredBox(
                   color: Colors.white10,
                   child: Icon(Icons.person, color: Colors.white54, size: 16),
                 ),

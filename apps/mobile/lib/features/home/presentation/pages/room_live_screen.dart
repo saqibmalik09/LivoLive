@@ -7742,7 +7742,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final emptyOwnerOuter = 53.0 * seatScale;
     final avatarSize = 42.0 * seatScale;
 
-    final frameSize = 58.0 * seatScale;
+    // Seat frames are decorative rings drawn around a 42pt avatar. At 58 the
+    // ring sat tight to the avatar and read as small — client asked for larger.
+    // The OverflowBox around this allows up to _kSeatSoundWave (93), so 68
+    // gives a visibly bigger frame with room to spare.
+    final frameSize = 68.0 * seatScale;
     final micIcon = 24.0 * seatScale;
     final lockIcon = 14.0 * seatScale;
     final chairFallback = 25.0 * seatScale;
