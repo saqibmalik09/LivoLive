@@ -33,12 +33,94 @@ const SETTINGS_KEYS = [
 ];
 
 const LIVEKIT_TOKEN_TTL_SECONDS = 6 * 60 * 60;
+const LIVEKIT_ADMIN_TOKEN_TTL_SECONDS = 60;
+const LIVEKIT_PERM_SYNC_TIMEOUT_MS = 2000;
 
 function b64url(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
+}
+
+async function signLiveKitAdminToken(
+  apiKey: string,
+  apiSecret: string,
+  room: string,
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const enc = new TextEncoder();
+  const segment = (o: unknown) => b64url(enc.encode(JSON.stringify(o)));
+  const data =
+    segment({ alg: 'HS256', typ: 'JWT' }) +
+    '.' +
+    segment({
+      iss: apiKey,
+      sub: apiKey,
+      nbf: now - 10,
+      exp: now + LIVEKIT_ADMIN_TOKEN_TTL_SECONDS,
+      video: { roomAdmin: true, room },
+    });
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(apiSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
+  return `${data}.${b64url(new Uint8Array(sig))}`;
+}
+
+/**
+ * Applies publish permission to a participant's *live* connection — what Orbit's
+ * /join and /leave used to do. Without it the app's 700ms
+ * waitForPublishPermission() times out and it reconnects to pick up the new
+ * token, which is the ~5s delay on taking the mic and on unmuting.
+ * A 404 just means the user is not connected yet; the token grant covers that.
+ * Never throws — on failure we fall back to the old reconnect behaviour.
+ */
+async function syncLiveKitPermission(opts: {
+  url: string;
+  apiKey: string;
+  apiSecret: string;
+  room: string;
+  identity: string;
+  canPublish: boolean;
+}): Promise<string> {
+  const httpBase = opts.url
+    .replace(/^wss:/i, 'https:')
+    .replace(/^ws:/i, 'http:')
+    .replace(/\/$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIVEKIT_PERM_SYNC_TIMEOUT_MS);
+  try {
+    const token = await signLiveKitAdminToken(opts.apiKey, opts.apiSecret, opts.room);
+    const res = await fetch(`${httpBase}/twirp/livekit.RoomService/UpdateParticipant`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        room: opts.room,
+        identity: opts.identity,
+        permission: {
+          canSubscribe: true,
+          canPublish: opts.canPublish,
+          canPublishData: true,
+        },
+      }),
+      signal: controller.signal,
+    });
+    if (res.ok) return 'updated';
+    if (res.status === 404) return 'not_connected';
+    return `failed_${res.status}`;
+  } catch (e) {
+    return `error_${(e as Error)?.name ?? 'unknown'}`;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -225,6 +307,17 @@ Deno.serve(async (req) => {
       });
       mark('livekit_sign_ms', t);
 
+      t = Date.now();
+      const permSync = await syncLiveKitPermission({
+        url: lkUrl,
+        apiKey: lkKey,
+        apiSecret: lkSecret,
+        room: lkRoomName,
+        identity: userData.user.id,
+        canPublish: lkOnSeat,
+      });
+      mark('livekit_perm_sync_ms', t);
+
       logTiming('livekit_ok', timings, t0, { roomId, openMic });
       return json({
         token,
@@ -235,6 +328,7 @@ Deno.serve(async (req) => {
         role: lkOnSeat ? 'speaker' : 'listener',
         on_seat: lkOnSeat,
         backend: 'livekit',
+        perm_sync: permSync,
         timings,
       });
     }

@@ -2,6 +2,8 @@ const { SignJWT } = require("jose");
 const db = require("./db");
 
 const TOKEN_TTL_SECONDS = 6 * 60 * 60;
+const ADMIN_TOKEN_TTL_SECONDS = 60;
+const PERMISSION_SYNC_TIMEOUT_MS = 2000;
 
 function resolveConfig(settings) {
   return {
@@ -39,6 +41,71 @@ async function signToken({ apiKey, apiSecret, identity, name, room, canPublish }
     .setNotBefore(now - 10)
     .setExpirationTime(now + TOKEN_TTL_SECONDS)
     .sign(new TextEncoder().encode(apiSecret));
+}
+
+function httpBaseFrom(wsUrl) {
+  return String(wsUrl)
+    .replace(/^wss:/i, "https:")
+    .replace(/^ws:/i, "http:")
+    .replace(/\/$/, "");
+}
+
+async function signAdminToken({ apiKey, apiSecret, room }) {
+  const now = Math.floor(Date.now() / 1e3);
+  return await new SignJWT({ video: { roomAdmin: true, room: room } })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer(apiKey)
+    .setSubject(apiKey)
+    .setNotBefore(now - 10)
+    .setExpirationTime(now + ADMIN_TOKEN_TTL_SECONDS)
+    .sign(new TextEncoder().encode(apiSecret));
+}
+
+/**
+ * Applies publish permission to a participant's *live* connection.
+ *
+ * This is what Orbit's /join and /leave used to do for us. Without it the app's
+ * 700ms waitForPublishPermission() always times out and it falls back to a full
+ * reconnect to pick up the new token — the ~5s delay on taking the mic and on
+ * unmuting. A 404 simply means the user is not connected yet (first join), in
+ * which case the token's own grant is what counts.
+ *
+ * Never throws: on any failure we return a reason and the caller proceeds, which
+ * just restores the previous reconnect behaviour rather than breaking voice.
+ */
+async function syncLivePermission({ url, apiKey, apiSecret, room, identity, canPublish }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PERMISSION_SYNC_TIMEOUT_MS);
+  try {
+    const token = await signAdminToken({ apiKey: apiKey, apiSecret: apiSecret, room: room });
+    const res = await fetch(
+      `${httpBaseFrom(url)}/twirp/livekit.RoomService/UpdateParticipant`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          room: room,
+          identity: identity,
+          permission: {
+            canSubscribe: true,
+            canPublish: canPublish,
+            canPublishData: true,
+          },
+        }),
+        signal: controller.signal,
+      },
+    );
+    if (res.ok) return "updated";
+    if (res.status === 404) return "not_connected";
+    return `failed_${res.status}`;
+  } catch (e) {
+    return `error_${e?.name || "unknown"}`;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -109,8 +176,22 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
   }
   mark("livekit_sign_ms", t);
 
+  // Grant/revoke on the live connection too, so an already-connected client does
+  // not have to reconnect just to pick up a permission change.
+  t = Date.now();
+  const permSync = await syncLivePermission({
+    url: cfg.url,
+    apiKey: cfg.apiKey,
+    apiSecret: cfg.apiSecret,
+    room: room,
+    identity: String(userId),
+    canPublish: canPublish,
+  });
+  mark("livekit_perm_sync_ms", t);
+
   console.log(
-    `[voice:livekit] ok room=${room} user=${userId} publish=${canPublish} seat=${onSeat}`,
+    `[voice:livekit] ok room=${room} user=${userId} publish=${canPublish} ` +
+      `seat=${onSeat} perm=${permSync} (${timings.livekit_perm_sync_ms}ms)`,
   );
 
   // Field names match what the app's _sessionFromMap expects. orbit_room_id is
@@ -126,6 +207,7 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
       role: canPublish ? "speaker" : "listener",
       on_seat: onSeat,
       backend: "livekit",
+      perm_sync: permSync,
       timings: timings,
     },
   };
