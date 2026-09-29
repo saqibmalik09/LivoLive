@@ -817,6 +817,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     } else {
       unawaited(_clearStaleSeatOnFreshEntry());
     }
+    // Check the ban first: everything below opens voice, subscriptions and chat,
+    // and tearing all of that down mid-flight is what left a black screen.
+    _checkRoomKickBan();
     _initZego();
     _setupRoomSubscriptions();
     if (!AppConstants.useRealtimeGateway) {
@@ -826,7 +829,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _loadChatAndWelcome();
     _fetchActiveGames();
     _fetchCurrentUserRole();
-    _checkRoomKickBan();
     _startActivityTimer();
     unawaited(_fetchRoomLevelStats());
 
@@ -2343,17 +2345,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (ban != null && mounted) {
         final expiresRaw = ban['expires_at']?.toString();
         final isPermanent = expiresRaw == null || expiresRaw.isEmpty;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              isPermanent
-                  ? 'You are permanently banned from this room.'
-                  : 'You are banned from this room until the kick expires.',
-            ),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-        Navigator.of(context).pop();
+        final message = isPermanent
+            ? 'You are permanently banned from this room.'
+            : 'You are banned from this room until the kick expires.';
+        // Route through the same teardown a live kick uses — it stops voice,
+        // clears room state and hides the bubble before popping. A bare pop()
+        // left those running and the screen rendered black. Deferred to after
+        // the frame so we never pop while the route is still being built.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _handleKickedFromRoom(message);
+        });
       }
     } catch (e) {
       debugPrint('Kick ban check error: $e');

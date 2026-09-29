@@ -45,28 +45,35 @@ Widget asyncErrorWidget(
 Stream<T> realtimeWithFallback<T>({
   required Future<T> Function() fetch,
   required Stream<T> Function() realtime,
+  Duration retryDelay = const Duration(seconds: 3),
+  Duration maxRetryDelay = const Duration(seconds: 30),
 }) async* {
-  T? last;
-  try {
-    last = await fetch();
-    yield last as T;
-  } catch (e) {
-    debugPrint('realtimeWithFallback initial fetch: $e');
-  }
+  // A dropped realtime subscription used to be swallowed whenever an earlier
+  // fetch had succeeded, so the provider kept serving its last value until the
+  // app restarted — the wallet showing a pre-transfer balance was this. Now the
+  // stream ending for any reason re-fetches and re-subscribes with backoff.
+  var delay = retryDelay;
 
-  try {
-    await for (final value in realtime()) {
-      last = value;
-      yield value;
+  while (true) {
+    try {
+      yield await fetch();
+      delay = retryDelay;
+    } catch (e) {
+      debugPrint('realtimeWithFallback fetch: $e');
     }
-  } catch (e) {
-    debugPrint('realtimeWithFallback stream suppressed: $e');
-    if (last == null) {
-      try {
-        yield await fetch();
-      } catch (e2) {
-        debugPrint('realtimeWithFallback recovery fetch: $e2');
+
+    try {
+      await for (final value in realtime()) {
+        yield value;
+        delay = retryDelay;
       }
+      debugPrint('realtimeWithFallback stream closed — resubscribing');
+    } catch (e) {
+      debugPrint('realtimeWithFallback stream error — resubscribing: $e');
     }
+
+    await Future<void>.delayed(delay);
+    final next = delay * 2;
+    delay = next > maxRetryDelay ? maxRetryDelay : next;
   }
 }
