@@ -1,7 +1,7 @@
 name: sk_live
 description: "LIVO — A premium social audio community and entertainment platform featuring real-time voice rooms, gamified user interactions, virtual gifting with animated effects, CP/Family clan systems, mini-games, and a full virtual economy. Built with Supabase/Zuvo backend and Orbit voice."
 publish_to: 'none'
-version: 1.3.0+24
+version: 1.3.1+25
 
 environment:
   sdk: ^3.11.4
