@@ -181,9 +181,23 @@ async function mintVoiceToken({
     .map((s) => s.trim())
     .filter(Boolean);
   const forcedLiveKit = livekitTestIds.includes(String(userId));
-  const backend = forcedLiveKit ? "livekit" : settings.voice_backend || "zego";
+
+  // LiveKit is the only supported backend. Orbit and Zego are retired.
+  //
+  // This deliberately ignores system_settings.voice_backend. That row was
+  // rewritten several times in one day - to zego with no app signature, and to
+  // orbit - each time silently taking voice off the working stack, once for
+  // over an hour. Voice is too important to hang off a mutable settings row
+  // that any UI or stray write can change. To reintroduce a switch later, put
+  // it back here deliberately rather than by editing a database row.
+  const backend = "livekit";
   if (forcedLiveKit) {
-    console.log(`[voice] user=${userId} forced to livekit by test allow-list`);
+    console.log(`[voice] user=${userId} in livekit test allow-list`);
+  }
+  if ((settings.voice_backend || "") !== "livekit") {
+    console.log(
+      `[voice] ignoring stored voice_backend='${settings.voice_backend || ""}' - livekit is enforced`,
+    );
   }
   if (backend === "livekit") {
     return await livekitVoice.mintVoiceToken({
