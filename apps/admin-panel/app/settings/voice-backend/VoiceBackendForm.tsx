@@ -7,10 +7,9 @@ import {
   type VoiceBackendId,
 } from "./actions";
 
+// Orbit and Zego are retired. LiveKit is the only supported backend.
 const OPTIONS: { id: VoiceBackendId; title: string; desc: string }[] = [
-  { id: "zego", title: "Zego", desc: "Legacy voice engine" },
-  { id: "orbit", title: "Orbit Voice", desc: "LiveKit via Orbit API" },
-  { id: "livekit", title: "LiveKit (direct)", desc: "No middleman — tokens minted here" },
+  { id: "livekit", title: "LiveKit (direct)", desc: "Tokens minted by our gateway" },
 ];
 
 export function VoiceBackendForm({ initial }: { initial: VoiceBackendSettings }) {

@@ -2,6 +2,12 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
 
+/**
+ * Orbit is retired. LiveKit is the only backend the app should use.
+ * The union keeps the legacy values so an existing stored setting still
+ * parses, but normalizeBackend() converges everything onto livekit and the
+ * UI offers nothing else.
+ */
 export type VoiceBackendId = "zego" | "orbit" | "livekit";
 
 export type VoiceBackendSettings = {
@@ -21,7 +27,11 @@ export type VoiceBackendSettings = {
 const BACKENDS: VoiceBackendId[] = ["zego", "orbit", "livekit"];
 
 function normalizeBackend(value: unknown): VoiceBackendId {
-  return BACKENDS.includes(value as VoiceBackendId) ? (value as VoiceBackendId) : "zego";
+  // Anything that is not an explicitly supported backend resolves to livekit.
+  // Orbit and Zego are retired: a stale stored value must not silently pull
+  // production back onto a dead stack.
+  void value;
+  return "livekit";
 }
 
 async function upsertSetting(key: string, value: string, description: string) {
