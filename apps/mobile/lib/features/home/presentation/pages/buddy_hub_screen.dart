@@ -303,15 +303,48 @@ class _BuddyHubScreenState extends ConsumerState<BuddyHubScreen> {
                       width: 2,
                     ),
                   ),
-                  child: Text(
-                    t.label,
-                    style: TextStyle(
-                      color: Colors.black87,
-                      fontWeight: isSelected
-                          ? FontWeight.w800
-                          : FontWeight.w600,
-                      fontSize: 15,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Each tier now carries its own mark, so Friend,
+                      // Bestie and Homie are told apart at a glance rather
+                      // than by reading three similar words.
+                      Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: t.colors,
+                          ),
+                          boxShadow: isSelected
+                              ? [
+                                  BoxShadow(
+                                    color: t.colors.last.withValues(
+                                      alpha: 0.45,
+                                    ),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: Icon(t.icon, size: 13, color: Colors.white),
+                      ),
+                      const SizedBox(width: 7),
+                      Text(
+                        t.label,
+                        style: TextStyle(
+                          color: Colors.black87,
+                          fontWeight: isSelected
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],

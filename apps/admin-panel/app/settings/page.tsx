@@ -26,6 +26,7 @@ import {
   Dices,
   CalendarCheck,
   Mic,
+  Store,
 } from "lucide-react";
 import Link from "next/link";
 export default function SettingsPage() {
@@ -165,6 +166,15 @@ export default function SettingsPage() {
           href="/settings/wallet"
           color="text-violet-400"
           bg="from-violet-500/20"
+        />
+
+        <SettingsCard
+          title="Merchants"
+          description="Wholesale tier above coin sellers. Make any ID a merchant, recharge or remove their coins, block them, and see sales, profit and every transaction."
+          icon={Store}
+          href="/merchants"
+          color="text-emerald-400"
+          bg="from-emerald-500/20"
         />
 
         <SettingsCard

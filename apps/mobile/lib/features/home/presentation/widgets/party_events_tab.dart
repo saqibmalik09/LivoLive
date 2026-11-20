@@ -59,16 +59,17 @@ class PartyEventsTab extends ConsumerWidget {
             );
           }
 
+          final s = MediaQuery.sizeOf(context).width / 750;
           return ListView.separated(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.fromLTRB(
-              12,
+              24 * s,
               8,
-              12,
+              24 * s,
               homeTabScrollBottomPadding(context),
             ),
             itemCount: events.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            separatorBuilder: (_, _) => SizedBox(height: 20 * s),
             itemBuilder: (context, index) {
               final event = events[index];
               return _EventCard(
@@ -144,120 +145,112 @@ class _EventCard extends StatelessWidget {
         !hasUploadedBanner &&
         (isCpNative || isWeeklyStar || isGameStar || isSkHost);
 
+    final s = MediaQuery.sizeOf(context).width / 750;
+    final dateRange = _dateRange(event.startAt, event.endAt);
+    final name = event.title.isNotEmpty ? event.title : event.subtitle;
+
     return GestureDetector(
       onTap: onTap,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: AspectRatio(
-          aspectRatio: 16 / 7,
-          child: Stack(
-            fit: StackFit.expand,
+        borderRadius: BorderRadius.circular(20 * s),
+        child: ColoredBox(
+          color: Colors.white,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (hasUploadedBanner)
-                CachedNetworkImage(
-                  imageUrl: event.versionedBannerUrl,
-                  cacheKey: '${event.id}_${event.cacheVersion}',
-                  fit: BoxFit.cover,
-                  fadeInDuration: Duration.zero,
-                  placeholder: (_, _) => Container(
-                    color: AppColors.primary.withValues(alpha: 0.15),
-                  ),
-                  errorWidget: (_, _, _) => Container(
-                    color: AppColors.primaryUltraLight,
-                    child: const Icon(
-                      Iconsax.image,
-                      color: AppColors.primary,
-                      size: 40,
-                    ),
-                  ),
-                )
-              else if (isCpNative)
-                Image.asset(
-                  CpEventAssets.banner,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: const Color(0xFF2A1035),
-                    child: const Icon(
-                      Icons.favorite,
-                      color: Color(0xFFFF69B4),
-                      size: 40,
-                    ),
-                  ),
-                )
-              else if (isWeeklyStar)
-                Image.asset(
-                  WeeklyStarAssets.banner,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: const Color(0xFF1A1040),
-                    child: const Icon(
-                      Icons.star,
-                      color: Color(0xFFFFD54F),
-                      size: 40,
-                    ),
-                  ),
-                )
-              else if (isGameStar)
-                Image.asset(
-                  GameStarAssets.banner,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: const Color(0xFF2A0A0A),
-                    child: const Icon(
-                      Icons.sports_esports,
-                      color: Color(0xFFFFD54F),
-                      size: 40,
-                    ),
-                  ),
-                )
-              else if (isSkHost)
-                Image.asset(
-                  SkPartyAssets.banner,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: const Color(0xFF0D1B2A),
-                    child: const Icon(
-                      Icons.celebration,
-                      color: Color(0xFFFFD54F),
-                      size: 40,
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  color: AppColors.primaryUltraLight,
-                  child: const Icon(
-                    Iconsax.image,
-                    color: AppColors.primary,
-                    size: 40,
-                  ),
-                ),
-              if (!useBundledBanner &&
-                  (event.title.isNotEmpty || event.subtitle.isNotEmpty))
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: 10,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (event.title.isNotEmpty)
-                        Text(
-                          event.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            shadows: [
-                              Shadow(blurRadius: 8, color: Colors.black54),
-                            ],
+              AspectRatio(
+                aspectRatio: 705 / 206,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (hasUploadedBanner)
+                      CachedNetworkImage(
+                        imageUrl: event.versionedBannerUrl,
+                        cacheKey: '${event.id}_${event.cacheVersion}',
+                        fit: BoxFit.cover,
+                        fadeInDuration: Duration.zero,
+                        placeholder: (_, _) => Container(
+                          color: AppColors.primary.withValues(alpha: 0.15),
+                        ),
+                        errorWidget: (_, _, _) => Container(
+                          color: AppColors.primaryUltraLight,
+                          child: const Icon(
+                            Iconsax.image,
+                            color: AppColors.primary,
+                            size: 40,
                           ),
                         ),
-                      if (event.subtitle.isNotEmpty)
-                        Text(
+                      )
+                    else if (isCpNative)
+                      Image.asset(
+                        CpEventAssets.banner,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: const Color(0xFF2A1035),
+                          child: const Icon(
+                            Icons.favorite,
+                            color: Color(0xFFFF69B4),
+                            size: 40,
+                          ),
+                        ),
+                      )
+                    else if (isWeeklyStar)
+                      Image.asset(
+                        WeeklyStarAssets.banner,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: const Color(0xFF1A1040),
+                          child: const Icon(
+                            Icons.star,
+                            color: Color(0xFFFFD54F),
+                            size: 40,
+                          ),
+                        ),
+                      )
+                    else if (isGameStar)
+                      Image.asset(
+                        GameStarAssets.banner,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: const Color(0xFF2A0A0A),
+                          child: const Icon(
+                            Icons.sports_esports,
+                            color: Color(0xFFFFD54F),
+                            size: 40,
+                          ),
+                        ),
+                      )
+                    else if (isSkHost)
+                      Image.asset(
+                        SkPartyAssets.banner,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: const Color(0xFF0D1B2A),
+                          child: const Icon(
+                            Icons.celebration,
+                            color: Color(0xFFFFD54F),
+                            size: 40,
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        color: AppColors.primaryUltraLight,
+                        child: const Icon(
+                          Iconsax.image,
+                          color: AppColors.primary,
+                          size: 40,
+                        ),
+                      ),
+                    if (!useBundledBanner &&
+                        event.title.isNotEmpty &&
+                        event.subtitle.isNotEmpty)
+                      Positioned(
+                        left: 12,
+                        right: 12,
+                        bottom: 10,
+                        child: Text(
                           event.subtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -269,13 +262,61 @@ class _EventCard extends StatelessWidget {
                             ],
                           ),
                         ),
+                      ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 59 * s,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 22 * s),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xFF494949),
+                            fontSize: 26 * s,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                      if (dateRange.isNotEmpty) ...[
+                        SizedBox(width: 12 * s),
+                        Text(
+                          dateRange,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: const Color(0xFF4F4F4F),
+                            fontSize: 26 * s,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  static String _dateRange(DateTime? start, DateTime? end) {
+    String d(DateTime t) {
+      final l = t.toLocal();
+      String two(int v) => v.toString().padLeft(2, '0');
+      return '${l.year}-${two(l.month)}-${two(l.day)}';
+    }
+
+    if (start == null && end == null) return '';
+    if (start == null) return '~ ${d(end!)}';
+    if (end == null) return '${d(start)} ~';
+    return '${d(start)} ~ ${d(end)}';
   }
 }

@@ -15,6 +15,7 @@ import {
   Heart,
   Network,
   Banknote,
+  Store,
 } from "lucide-react";
 import Link from "next/link";
 async function getStats() {
@@ -120,6 +121,12 @@ export default async function Dashboard() {
             </h3>
           </div>
           <div className="grid grid-cols-3 gap-4">
+            <ActionButton
+              label="Merchants"
+              icon={Store}
+              href="/merchants"
+              color="text-emerald-400"
+            />
             <ActionButton
               label="Messages"
               icon={MessageSquare}

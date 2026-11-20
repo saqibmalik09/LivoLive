@@ -1,0 +1,45 @@
+# SK Live merchant panel — https://merchant.skliveparty.online
+services:
+  merchant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    image: sklive-merchant-panel:local
+    container_name: sklive-merchant-panel
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    networks:
+      - coolify
+      - supabase
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.sklive-merchant-gzip.compress=true
+      - traefik.http.middlewares.sklive-merchant-https.redirectscheme.scheme=https
+      - traefik.http.routers.sklive-merchant-http.entryPoints=http
+      - traefik.http.routers.sklive-merchant-http.rule=Host(`merchant.skliveparty.online`)
+      - traefik.http.routers.sklive-merchant-http.middlewares=sklive-merchant-https
+      - traefik.http.routers.sklive-merchant-http.service=sklive-merchant
+      - traefik.http.routers.sklive-merchant-https.entryPoints=https
+      - traefik.http.routers.sklive-merchant-https.rule=Host(`merchant.skliveparty.online`)
+      - traefik.http.routers.sklive-merchant-https.middlewares=sklive-merchant-gzip
+      - traefik.http.routers.sklive-merchant-https.service=sklive-merchant
+      - traefik.http.routers.sklive-merchant-https.tls=true
+      - traefik.http.routers.sklive-merchant-https.tls.certresolver=letsencrypt
+      - traefik.http.services.sklive-merchant.loadbalancer.server.port=3000
+
+networks:
+  coolify:
+    external: true
+  supabase:
+    external: true
+    name: mnq3vesx0syflb0m0bot3oa2

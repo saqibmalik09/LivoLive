@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_svga/flutter_svga.dart';
 import 'package:sk_live/core/util/svga_cache.dart';
 
@@ -9,6 +8,8 @@ class RaveSVGAPlayer extends StatefulWidget {
   final bool repeat;
   final VoidCallback? onFinished;
   final VoidCallback? onLoaded;
+
+  final ValueChanged<MovieEntity>? onMovieLoaded;
   final bool autoPlay;
   final double playbackSpeed;
 
@@ -19,6 +20,7 @@ class RaveSVGAPlayer extends StatefulWidget {
     this.repeat = true,
     this.onFinished,
     this.onLoaded,
+    this.onMovieLoaded,
     this.autoPlay = true,
     this.playbackSpeed = 1.0,
   });
@@ -90,16 +92,17 @@ class RaveSVGAPlayerState extends State<RaveSVGAPlayer>
     try {
       final MovieEntity videoItem;
       if (widget.resUrl.startsWith('assets/')) {
-        final data = await rootBundle.load(widget.resUrl);
-        videoItem = await SVGAParser.shared.decodeFromBuffer(
-          data.buffer.asUint8List(),
-        );
+        // Cached too: decoding a bundled asset is CPU-bound, and repeating it
+        // on every play is what made the global-win banner miss its load
+        // deadline and skip the animation.
+        videoItem = await SvgaCache.loadAsset(widget.resUrl);
       } else {
         // Cached: decodeFromURL re-downloads and re-parses on every play, which
         // is why gift animations arrived late and sometimes not at all.
         videoItem = await SvgaCache.load(widget.resUrl);
       }
       if (mounted && _controller != null) {
+        widget.onMovieLoaded?.call(videoItem);
         setState(() {
           _controller!.videoItem = videoItem;
           _nativeDurationMs = _controller!.duration?.inMilliseconds;

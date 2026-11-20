@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 
 class SpecialIdStyle {
@@ -58,8 +61,25 @@ final specialIdStylesProvider = FutureProvider<Map<int, SpecialIdStyle>>((
     final style = SpecialIdStyle.fromMap(Map<String, dynamic>.from(row));
     map[style.level] = style;
   }
+  // Warm every crest into the SVGA cache in the background. RaveSVGAPlayer
+  // renders nothing until its animation is decoded, and these are 110-190 KB
+  // each, so the first time you opened someone's profile their special-ID crest
+  // was simply missing — the badge looked like an ordinary chip. Fetched once
+  // they persist on disk, so every badge then draws immediately.
+  unawaited(_prewarmCrests(map.values));
   return map;
 });
+
+Future<void> _prewarmCrests(Iterable<SpecialIdStyle> styles) async {
+  for (final style in styles) {
+    if (style.svgaUrl.isEmpty) continue;
+    try {
+      await SvgaCache.load(style.svgaUrl);
+    } catch (e) {
+      debugPrint('[svga] special-id crest prewarm failed lv${style.level}: $e');
+    }
+  }
+}
 
 class SpecialIdBadge extends ConsumerWidget {
   const SpecialIdBadge({
@@ -80,14 +100,6 @@ class SpecialIdBadge extends ConsumerWidget {
     final stylesAsync = ref.watch(specialIdStylesProvider);
     final style = level == null ? null : stylesAsync.valueOrNull?[level!];
 
-    if (style == null || style.svgaUrl.isEmpty) {
-      return _PlainIdChip(id: id, onTap: onTap);
-    }
-
-    final iconSize = height * 1.55;
-    final bubbleHeight = height;
-    final crestOverlap = iconSize * 0.42;
-
     void copyId() {
       Clipboard.setData(ClipboardData(text: id));
       ScaffoldMessenger.of(context).showSnackBar(
@@ -97,6 +109,18 @@ class SpecialIdBadge extends ConsumerWidget {
         ),
       );
     }
+
+    if (style == null || style.svgaUrl.isEmpty) {
+      // The plain chip draws a copy icon, so it has to actually copy. It was
+      // handed the bare onTap — null almost everywhere — so an ID that looked
+      // copyable did nothing when tapped. Only the styled badge had the
+      // fallback.
+      return _PlainIdChip(id: id, onTap: onTap ?? copyId);
+    }
+
+    final iconSize = height * 1.55;
+    final bubbleHeight = height;
+    final crestOverlap = iconSize * 0.42;
 
     return GestureDetector(
       onTap: onTap ?? copyId,
@@ -161,15 +185,124 @@ class SpecialIdBadge extends ConsumerWidget {
               top: 0,
               bottom: 0,
               width: iconSize,
-              child: RaveSVGAPlayer(
-                resUrl: style.svgaUrl,
-                fit: BoxFit.contain,
-                repeat: true,
-              ),
+              child: _SpecialIdCrest(url: style.svgaUrl),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SpecialIdCrest extends StatefulWidget {
+  const _SpecialIdCrest({required this.url});
+
+  final String url;
+
+  @override
+  State<_SpecialIdCrest> createState() => _SpecialIdCrestState();
+}
+
+class _SpecialIdCrestState extends State<_SpecialIdCrest> {
+  @visibleForTesting
+  static const Duration attemptTimeout = Duration(seconds: 8);
+  static const int _maxAttempts = 8;
+  static const int _maxBackoffSeconds = 8;
+
+  bool _ready = false;
+  int _attempt = 0;
+
+  int _generation = 0;
+  Timer? _watchdog;
+  Timer? _retryTimer;
+
+  bool _lastTryTimedOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _begin();
+  }
+
+  @override
+  void didUpdateWidget(_SpecialIdCrest oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) _begin();
+  }
+
+  void _begin() {
+    _generation++;
+    _watchdog?.cancel();
+    _retryTimer?.cancel();
+    _attempt = 0;
+    _lastTryTimedOut = false;
+    final url = widget.url;
+    SvgaCache.pin([url]);
+    _ready = SvgaCache.isInMemory(url);
+    if (!_ready) _try();
+  }
+
+  void _try() {
+    final gen = _generation;
+    _watchdog?.cancel();
+    _watchdog = Timer(attemptTimeout, () {
+      if (gen != _generation) return;
+      _lastTryTimedOut = true;
+      _scheduleRetry(gen);
+    });
+    final fresh = _lastTryTimedOut;
+    _lastTryTimedOut = false;
+    SvgaCache.load(widget.url, fresh: fresh).then(
+      (_) {
+        if (!mounted || gen != _generation || _ready) return;
+        _watchdog?.cancel();
+        _retryTimer?.cancel();
+        setState(() => _ready = true);
+      },
+      onError: (Object e) {
+        if (!mounted || gen != _generation || _ready) return;
+        debugPrint('[svga] special-id crest try ${_attempt + 1} failed: $e');
+        _scheduleRetry(gen);
+      },
+    );
+  }
+
+  void _scheduleRetry(int gen) {
+    if (!mounted || gen != _generation || _ready) return;
+    _watchdog?.cancel();
+    if (_retryTimer?.isActive ?? false) return;
+    if (_attempt + 1 >= _maxAttempts) return;
+    final seconds = (1 << _attempt).clamp(1, _maxBackoffSeconds);
+    _retryTimer = Timer(Duration(seconds: seconds), () {
+      if (!mounted || gen != _generation || _ready) return;
+      _attempt++;
+      _try();
+    });
+  }
+
+  void _onPlayerError() {
+    if (!mounted) return;
+    setState(() => _ready = false);
+    _scheduleRetry(_generation);
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _watchdog?.cancel();
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) return const SizedBox.shrink();
+    return RaveSVGAPlayer(
+      key: ValueKey<String>(widget.url),
+      resUrl: widget.url,
+      fit: BoxFit.contain,
+      repeat: true,
+      onFinished: _onPlayerError,
     );
   }
 }

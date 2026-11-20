@@ -81,6 +81,7 @@
   "profile_cpNest": "ซีพี เนสท์",
   "profile_buddies": "เพื่อน",
   "profile_resellerPanel": "แผงตัวแทนจำหน่าย",
+  "profile_merchantPanel": "แผงผู้ค้า",
   "profile_accountManagement": "การจัดการบัญชี",
   "profile_staffCenter": "{role} ศูนย์",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "ส่งรหัสอีกครั้ง",
   "auth_verificationSuccessful": "การยืนยันสำเร็จ!",
   "auth_completeProfileTitle": "กรอกโปรไฟล์ของคุณให้สมบูรณ์",
+  "auth_selectGender": "เลือกเพศของคุณ",
+  "auth_genderMale": "ชาย",
+  "auth_genderFemale": "หญิง",
   "auth_nickname": "ชื่อเล่น",
   "auth_hintEnter": "เข้า",
   "auth_basicInformation": "ข้อมูลพื้นฐาน",
@@ -257,6 +261,14 @@
   "party_mineTitle": "ของฉัน",
   "party_tabHot": "ร้อน",
   "party_tabRoom": "ห้อง",
+  "party_tabEvent": "กิจกรรม",
+  "profile_coin": "เหรียญ",
+  "home_selectCountry": "เลือกประเทศ",
+  "home_regionMiddleEast": "ตะวันออกกลาง",
+  "home_regionAsia": "เอเชีย",
+  "home_regionAmerica": "อเมริกา",
+  "home_regionEurope": "ยุโรป",
+  "home_regionAfrica": "แอฟริกา",
   "party_tooltipRanking": "การจัดอันดับ",
   "party_tooltipSearch": "ค้นหา",
   "party_tooltipMyRoom": "ห้องของฉัน",
@@ -635,5 +647,7 @@
   "event_lastWeekList": "รายการสัปดาห์ที่แล้ว",
   "event_skHostParty": "Livo โฮสต์ปาร์ตี้",
   "event_noRewardLastPeriod": "ไม่มีรางวัลสำหรับช่วงกิจกรรมสุดท้าย",
-  "home_noRankedRoom": "ไม่มีห้องจัดอันดับว่างในขณะนี้"
+  "home_noRankedRoom": "ไม่มีห้องจัดอันดับว่างในขณะนี้",
+  "topBanner_leaveRoomConfirm": "คุณแน่ใจหรือไม่ว่าต้องการออกจากห้องนี้?",
+  "topBanner_enterRoomConfirm": "คุณต้องการเข้าห้องนี้หรือไม่?"
 }

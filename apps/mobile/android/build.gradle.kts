@@ -1,3 +1,5 @@
+apply(from = "agp-compat.gradle")
+
 allprojects {
     repositories {
         google()

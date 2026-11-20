@@ -60,13 +60,13 @@ final agencyOwnerExpProvider = FutureProvider<int>((ref) async {
 
   var totalExp = 0;
   try {
-    final earnings = await Supabase.instance.client
-        .from('earning_logs')
-        .select('agency_amount')
-        .eq('agency_owner_id', userId);
-    for (final row in earnings as List) {
-      totalExp += (row['agency_amount'] as num?)?.toInt() ?? 0;
-    }
+    // Summed server-side — the unbounded select over earning_logs timed out for
+    // owners with a large history and took this provider down with it.
+    final total = await Supabase.instance.client.rpc(
+      'agency_total_exp',
+      params: <String, dynamic>{'p_owner_id': userId},
+    );
+    totalExp = (total as num?)?.toInt() ?? 0;
 
     final agency = await ref.watch(myAgencyProvider.future);
     if (agency != null) {

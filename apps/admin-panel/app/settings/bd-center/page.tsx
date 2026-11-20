@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { ArrowLeft, Building2 } from "lucide-react";
 import { BdGiftPackEditor } from "@/components/BdGiftPackEditor";
+import { currentPeriodId } from "@/lib/salary-hub/constants";
 import {
+  addAgencySalaryLevel,
+  addBdLevel,
   backfillStaffRoleCosmetics,
   executeAgencyPeriodPayout,
   executeBdMonthlyPayout,
@@ -23,10 +26,10 @@ export default async function BdCenterSettingsPage() {
     listStaffRoleCosmetics(),
     listBdGiftPackSlots(),
   ]);
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const day = now.getDate();
-  const periodId = day <= 15 ? `${ym}-A` : `${ym}-B`;
+  const periodId = currentPeriodId();
+  const levelNumbers = (rows: { level: number | string }[]) => rows.map((r) => Number(r.level) || 0);
+  const nextAgencyLevel = Math.max(0, ...levelNumbers(agencyLevels)) + 1;
+  const nextBdLevel = Math.max(0, ...levelNumbers(bdLevels)) + 1;
   return (
     <div className="space-y-10 pb-32">
       <Link
@@ -160,7 +163,7 @@ export default async function BdCenterSettingsPage() {
             </button>
           </form>
           <form action={executeBdMonthlyPayout} className="space-y-3 rounded-2xl bg-black/30 p-4">
-            <p className="text-sm text-white/60">BD period payout (A on 16th / B on 1st, PK)</p>
+            <p className="text-sm text-white/60">BD monthly payout (whole month, auto-paid on 1st, PK)</p>
             <input
               name="period_yyyy_mm"
               defaultValue={periodId}
@@ -217,6 +220,33 @@ export default async function BdCenterSettingsPage() {
             ))}
           </tbody>
         </table>
+        <form
+          action={addAgencySalaryLevel}
+          className="flex flex-wrap gap-2 items-center border-t border-white/10 pt-4"
+        >
+          <span className="text-sm font-bold text-white/60 mr-2">Add level {nextAgencyLevel}</span>
+          <input
+            name="charm_target"
+            required
+            placeholder="Charm target"
+            className="w-28 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <input
+            name="charm_salary_usd"
+            required
+            placeholder="Charm $"
+            className="w-20 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <input
+            name="agent_salary_usd"
+            required
+            placeholder="Agent $"
+            className="w-20 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <button className="rounded-lg bg-violet-500/80 px-3 py-1 text-xs font-bold">
+            + Add level
+          </button>
+        </form>
       </section>
 
       <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
@@ -280,6 +310,39 @@ export default async function BdCenterSettingsPage() {
               ))}
           </tbody>
         </table>
+        <form
+          action={addBdLevel}
+          className="flex flex-wrap gap-2 items-center border-t border-white/10 pt-4"
+        >
+          <span className="text-sm font-bold text-white/60 mr-2">Add level {nextBdLevel}</span>
+          <input
+            name="agency_target_usd"
+            required
+            placeholder="Agency target $"
+            className="w-24 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <input
+            name="basic_salary_usd"
+            required
+            placeholder="Basic"
+            className="w-20 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <input
+            name="commission_usd"
+            required
+            placeholder="Comm"
+            className="w-20 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <input
+            name="new_bd_commission_usd"
+            required
+            placeholder="New BD"
+            className="w-20 rounded-lg bg-black/40 border border-white/10 px-2 py-1"
+          />
+          <button className="rounded-lg bg-sky-500/80 px-3 py-1 text-xs font-bold">
+            + Add level
+          </button>
+        </form>
       </section>
     </div>
   );

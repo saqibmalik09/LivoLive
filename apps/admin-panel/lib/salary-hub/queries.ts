@@ -9,6 +9,7 @@ import {
   periodBounds,
   SALARY_HUB_ROLES,
   periodToBdMonth,
+  monthPeriodIds,
 } from "@/lib/salary-hub/constants";
 import {
   estimateAgencyUsd,
@@ -124,22 +125,37 @@ function collectDescendantStaffIds(rootId: string, all: StaffRow[]): string[] {
   }
   return out;
 }
+const IN_CHUNK = 120;
+
+async function selectInChunks(
+  table: string,
+  columns: string,
+  filterColumn: string,
+  ids: string[],
+  eq: Record<string, string> = {},
+): Promise<any[]> {
+  if (ids.length === 0) return [];
+  const out: any[] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const chunk = ids.slice(i, i + IN_CHUNK);
+    let query = supabaseAdmin.from(table).select(columns).in(filterColumn, chunk);
+    for (const [col, val] of Object.entries(eq)) query = query.eq(col, val);
+    const { data } = await query;
+    if (data?.length) out.push(...data);
+  }
+  return out;
+}
+
 async function agencyIdsForStaffIds(staffIds: string[]): Promise<string[]> {
   if (staffIds.length === 0) return [];
-  const { data } = await supabaseAdmin
-    .from("agencies")
-    .select("id, sponsor_staff_id")
-    .in("sponsor_staff_id", staffIds);
-  return (data || []).map((a) => a.id as string);
+  const data = await selectInChunks("agencies", "id, sponsor_staff_id", "sponsor_staff_id", staffIds);
+  return data.map((a) => a.id as string);
 }
 async function hostCountsByAgency(agencyIds: string[]): Promise<Record<string, number>> {
   const map: Record<string, number> = {};
   if (agencyIds.length === 0) return map;
-  const { data } = await supabaseAdmin
-    .from("agency_members")
-    .select("agency_id")
-    .in("agency_id", agencyIds);
-  for (const row of data || []) {
+  const data = await selectInChunks("agency_members", "agency_id", "agency_id", agencyIds);
+  for (const row of data) {
     const id = row.agency_id as string;
     map[id] = (map[id] || 0) + 1;
   }
@@ -214,19 +230,17 @@ export async function enrichBdStaffPayStatus(
 ): Promise<StaffListItem[]> {
   if (staff.length === 0) return staff;
   const ids = staff.map((s) => s.id);
-  const [{ data: stats }, { data: settlements }] = await Promise.all([
-    supabaseAdmin
-      .from("bd_staff_monthly_stats")
-      .select(
-        "staff_id, est_total_usd, est_basic_usd, est_commission_usd, est_new_bd_usd, work_days, work_hours",
-      )
-      .eq("period_yyyy_mm", periodYyyyMm)
-      .in("staff_id", ids),
-    supabaseAdmin
-      .from("bd_staff_settlements")
-      .select("staff_id, status, total_usd")
-      .eq("period_yyyy_mm", periodYyyyMm)
-      .in("staff_id", ids),
+  const [stats, settlements] = await Promise.all([
+    selectInChunks(
+      "bd_staff_monthly_stats",
+      "staff_id, est_total_usd, est_basic_usd, est_commission_usd, est_new_bd_usd, work_days, work_hours",
+      "staff_id",
+      ids,
+      { period_yyyy_mm: periodYyyyMm },
+    ),
+    selectInChunks("bd_staff_settlements", "staff_id, status, total_usd", "staff_id", ids, {
+      period_yyyy_mm: periodYyyyMm,
+    }),
   ]);
   const paid = new Set<string>();
   for (const s of settlements || []) {
@@ -234,13 +248,7 @@ export async function enrichBdStaffPayStatus(
   }
   const payableByStaff: Record<string, number> = {};
   for (const row of stats || []) {
-    const days = Number(row.work_days || 0) || 0;
-    const hours = Number(row.work_hours || 0) || 0;
-    let total = Number(row.est_total_usd || 0) || 0;
-    if (days < 10 || hours < 30) {
-      total = (Number(row.est_commission_usd || 0) || 0) + (Number(row.est_new_bd_usd || 0) || 0);
-    }
-    payableByStaff[row.staff_id as string] = total;
+    payableByStaff[row.staff_id as string] = Number(row.est_total_usd || 0) || 0;
   }
   return staff.map((s) => ({
     ...s,
@@ -317,23 +325,28 @@ export async function listAgencies(periodId: string, q?: string | null): Promise
   const charmByAgency: Record<string, number> = {};
   const hostCharmsByAgency: Record<string, number[]> = {};
   if (ids.length > 0) {
-    const { data: members } = await supabaseAdmin
-      .from("agency_members")
-      .select("agency_id, user_id")
-      .in("agency_id", ids);
-    const userIds = Array.from(new Set((members || []).map((m) => m.user_id as string)));
+    const members = await selectInChunks(
+      "agency_members",
+      "agency_id, user_id",
+      "agency_id",
+      ids,
+    );
+    const userIds = Array.from(new Set(members.map((m) => m.user_id as string)));
     const charmByUser: Record<string, number> = {};
     if (userIds.length > 0) {
-      const { data: stats } = await supabaseAdmin
-        .from("host_period_stats")
-        .select("user_id, charm_points")
-        .eq("period_id", periodId)
-        .in("user_id", userIds);
-      for (const s of stats || []) {
-        charmByUser[s.user_id as string] = Number(s.charm_points || 0) || 0;
+      for (let i = 0; i < userIds.length; i += IN_CHUNK) {
+        const chunk = userIds.slice(i, i + IN_CHUNK);
+        const { data: stats } = await supabaseAdmin
+          .from("host_period_stats")
+          .select("user_id, charm_points")
+          .eq("period_id", periodId)
+          .in("user_id", chunk);
+        for (const s of stats || []) {
+          charmByUser[s.user_id as string] = Number(s.charm_points || 0) || 0;
+        }
       }
     }
-    for (const m of members || []) {
+    for (const m of members) {
       const aid = m.agency_id as string;
       const hostCharm = charmByUser[m.user_id as string] || 0;
       charmByAgency[aid] = (charmByAgency[aid] || 0) + hostCharm;
@@ -342,14 +355,17 @@ export async function listAgencies(periodId: string, q?: string | null): Promise
   }
   const paidAgency = new Set<string>();
   if (ids.length > 0) {
-    const { data: settlements } = await supabaseAdmin
-      .from("agency_period_settlements")
-      .select("agency_id")
-      .eq("period_id", periodId)
-      .eq("status", "paid")
-      .in("agency_id", ids);
-    for (const s of settlements || []) {
-      paidAgency.add(s.agency_id as string);
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const chunk = ids.slice(i, i + IN_CHUNK);
+      const { data: settlements } = await supabaseAdmin
+        .from("agency_period_settlements")
+        .select("agency_id")
+        .eq("period_id", periodId)
+        .eq("status", "paid")
+        .in("agency_id", chunk);
+      for (const s of settlements || []) {
+        paidAgency.add(s.agency_id as string);
+      }
     }
   }
   const mapped = (agencies || []).map((a: any) => {
@@ -470,12 +486,14 @@ export async function listHosts(periodId: string, q?: string | null): Promise<Ho
     }
   > = {};
   if (userIds.length > 0) {
-    const { data: stats } = await supabaseAdmin
-      .from("host_period_stats")
-      .select("user_id, charm_points, total_diamonds, total_on_mic_seconds, valid_days")
-      .eq("period_id", periodId)
-      .in("user_id", userIds);
-    for (const t of stats || []) {
+    const stats = await selectInChunks(
+      "host_period_stats",
+      "user_id, charm_points, total_diamonds, total_on_mic_seconds, valid_days",
+      "user_id",
+      userIds,
+      { period_id: periodId },
+    );
+    for (const t of stats) {
       statsByUser[t.user_id as string] = {
         charm_points: Number(t.charm_points || 0) || 0,
         total_diamonds: Number(t.total_diamonds || 0) || 0,
@@ -548,27 +566,28 @@ export async function getStaffDrilldown(
   const agencyIds = await agencyIdsForStaffIds(treeStaffIds);
   const hostMap = await hostCountsByAgency(agencyIds);
   const settings = await loadSalarySettings();
-  const { data: agencyRows } = await supabaseAdmin
-    .from("agencies")
-    .select(
-      `
+  const agencyRows = await selectInChunks(
+    "agencies",
+    `
       id, name, agency_code, is_active,
       users:owner_id(username),
       sponsor:business_staff!sponsor_staff_id(staff_code, users:user_id(username))
     `,
-    )
-    .in("id", agencyIds.length ? agencyIds : ["00000000-0000-0000-0000-000000000000"]);
-  const { data: memberRows } = await supabaseAdmin
-    .from("agency_members")
-    .select(
+    "id",
+    agencyIds,
+  );
+  const memberRows = (
+    await selectInChunks(
+      "agency_members",
       `
       user_id, agency_id, role,
       agencies:agency_id(name),
       users:user_id(username, short_id, avatar_url)
     `,
+      "agency_id",
+      agencyIds,
     )
-    .in("agency_id", agencyIds.length ? agencyIds : ["00000000-0000-0000-0000-000000000000"])
-    .limit(300);
+  ).slice(0, 300);
   const hosts: HostListItem[] = (memberRows || []).map((m: any) => {
     const agency = Array.isArray(m.agencies) ? m.agencies[0] : m.agencies;
     const user = Array.isArray(m.users) ? m.users[0] : m.users;
@@ -596,12 +615,14 @@ export async function getStaffDrilldown(
   const charmByAgency: Record<string, number> = {};
   const hostCharmsByAgency: Record<string, number[]> = {};
   if (hostUserIds.length > 0) {
-    const { data: stats } = await supabaseAdmin
-      .from("host_period_stats")
-      .select("user_id, charm_points, total_diamonds, total_on_mic_seconds, valid_days")
-      .eq("period_id", periodId)
-      .in("user_id", hostUserIds);
-    for (const t of stats || []) {
+    const stats = await selectInChunks(
+      "host_period_stats",
+      "user_id, charm_points, total_diamonds, total_on_mic_seconds, valid_days",
+      "user_id",
+      hostUserIds,
+      { period_id: periodId },
+    );
+    for (const t of stats) {
       const charm = Number(t.charm_points || 0) || 0;
       const diamonds = Number(t.total_diamonds || 0) || 0;
       periodCharm += charm;
@@ -658,13 +679,15 @@ export async function getStaffDrilldown(
   });
   let periodSalaryPaid = 0;
   if (hostUserIds.length > 0) {
-    const { data: payouts } = await supabaseAdmin
-      .from("host_salary_payouts")
-      .select("amount, beneficiary_user_id")
-      .eq("period_id", periodId)
-      .in("beneficiary_user_id", hostUserIds);
-    for (const p of payouts || []) {
-      periodSalaryPaid += Number(p.amount || 0) || 0;
+    const payouts = await selectInChunks(
+      "host_salary_payouts",
+      "total_amount, beneficiary_user_id",
+      "beneficiary_user_id",
+      hostUserIds,
+      { period_id: periodId },
+    );
+    for (const p of payouts) {
+      periodSalaryPaid += Number(p.total_amount || 0) || 0;
     }
   }
   const { data: rootUser } = await supabaseAdmin
@@ -737,9 +760,117 @@ export async function getStaffDrilldown(
     },
   };
 }
+export async function getStaffDrilldownMonthly(
+  staffId: string,
+  monthlyPeriodId: string,
+): Promise<StaffDrilldown | null> {
+  const month = (monthlyPeriodId || "").slice(0, 7);
+  const [year, mon] = month.split("-").map(Number);
+  const parts = (
+    await Promise.all(monthPeriodIds(year, mon).map((id) => getStaffDrilldown(staffId, id)))
+  ).filter((d): d is StaffDrilldown => d !== null);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  const [a] = parts;
+  const sum = (pick: (d: StaffDrilldown) => number) => parts.reduce((s, d) => s + pick(d), 0);
+  return {
+    ...a,
+    periodId: monthlyPeriodId,
+    totals: {
+      ...a.totals,
+      periodCharm: sum((d) => d.totals.periodCharm),
+      periodDiamonds: sum((d) => d.totals.periodDiamonds),
+      periodSalaryPaid: sum((d) => d.totals.periodSalaryPaid),
+      estimatedHostUsd: sum((d) => d.totals.estimatedHostUsd),
+      estimatedAgencyUsd: sum((d) => d.totals.estimatedAgencyUsd),
+    },
+  };
+}
+
+export async function getStaffDrilldownWholeMonth(
+  staffId: string,
+  monthlyPeriodId: string,
+): Promise<StaffDrilldown | null> {
+  const month = (monthlyPeriodId || "").slice(0, 7);
+  const [year, mon] = month.split("-").map(Number);
+  const parts = (
+    await Promise.all(monthPeriodIds(year, mon).map((id) => getStaffDrilldown(staffId, id)))
+  ).filter((d): d is StaffDrilldown => d !== null);
+  if (parts.length === 0) return null;
+  const [a] = parts;
+  const sum = (pick: (d: StaffDrilldown) => number) => parts.reduce((s, d) => s + pick(d), 0);
+
+  const agencies = new Map<string, AgencyListItem>();
+  const hosts = new Map<string, HostListItem>();
+  for (const part of parts) {
+    for (const ag of part.agencies) {
+      const prev = agencies.get(ag.id);
+      agencies.set(
+        ag.id,
+        prev
+          ? {
+              ...prev,
+              periodCharm: prev.periodCharm + ag.periodCharm,
+              estimatedUsd: prev.estimatedUsd + ag.estimatedUsd,
+              charmSalaryUsd: prev.charmSalaryUsd + ag.charmSalaryUsd,
+              agentSalaryUsd: prev.agentSalaryUsd + ag.agentSalaryUsd,
+              salaryLevel: Math.max(prev.salaryLevel, ag.salaryLevel),
+            }
+          : { ...ag },
+      );
+    }
+    for (const h of part.hosts) {
+      const key = `${h.agency_id}:${h.user_id}`;
+      const prev = hosts.get(key);
+      hosts.set(
+        key,
+        prev
+          ? {
+              ...prev,
+              periodCharm: prev.periodCharm + h.periodCharm,
+              periodDiamonds: prev.periodDiamonds + h.periodDiamonds,
+              hostTierUsd: prev.hostTierUsd + h.hostTierUsd,
+              charmSalaryUsd: prev.charmSalaryUsd + h.charmSalaryUsd,
+              estimatedUsd: prev.estimatedUsd + h.estimatedUsd,
+              hostTierName: h.hostTierName ?? prev.hostTierName,
+              charmLevel: Math.max(prev.charmLevel, h.charmLevel),
+            }
+          : { ...h },
+      );
+    }
+  }
+
+  return {
+    ...a,
+    agencies: Array.from(agencies.values()),
+    hosts: Array.from(hosts.values()),
+    periodId: monthlyPeriodId,
+    totals: {
+      ...a.totals,
+      periodCharm: sum((d) => d.totals.periodCharm),
+      periodDiamonds: sum((d) => d.totals.periodDiamonds),
+      periodSalaryPaid: sum((d) => d.totals.periodSalaryPaid),
+      estimatedHostUsd: sum((d) => d.totals.estimatedHostUsd),
+      estimatedAgencyUsd: sum((d) => d.totals.estimatedAgencyUsd),
+    },
+  };
+}
+
+export async function resolveBdPeriodId(periodId: string): Promise<string> {
+  const month = (periodId || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return periodToBdMonth(periodId);
+  const monthlyId = `${month}-M`;
+  const { data } = await supabaseAdmin
+    .from("salary_periods")
+    .select("period_id")
+    .eq("period_id", monthlyId)
+    .maybeSingle();
+  return data?.period_id ? monthlyId : periodToBdMonth(periodId);
+}
+
 export async function getPeriodSalaryOverview(periodId: string): Promise<PeriodSalaryOverview> {
   const settings = await loadSalarySettings();
-  const bdMonth = periodToBdMonth(periodId);
+  const bdMonth = await resolveBdPeriodId(periodId);
   const [
     { data: hostStats },
     { data: hostPayouts },
@@ -840,5 +971,43 @@ export async function getPeriodSalaryOverview(periodId: string): Promise<PeriodS
     staff: { superBd, countyAdmin, bd: bdCount },
     grandEstimatedUsd,
     grandPaidUsd,
+  };
+}
+
+export async function getPeriodSalaryOverviewMonthly(
+  monthlyPeriodId: string,
+): Promise<PeriodSalaryOverview> {
+  const month = (monthlyPeriodId || "").slice(0, 7);
+  const [year, mon] = month.split("-").map(Number);
+  const parts = await Promise.all(
+    monthPeriodIds(year, mon).map((id) => getPeriodSalaryOverview(id)),
+  );
+  const [a] = parts;
+  const max = (pick: (o: PeriodSalaryOverview) => number) => Math.max(...parts.map(pick));
+  const sum = (pick: (o: PeriodSalaryOverview) => number) => parts.reduce((s, o) => s + pick(o), 0);
+  const hosts = {
+    count: max((o) => o.hosts.count),
+    withProgress: max((o) => o.hosts.withProgress),
+    estimatedUsd: sum((o) => o.hosts.estimatedUsd),
+    paidUsd: sum((o) => o.hosts.paidUsd),
+    paidRows: sum((o) => o.hosts.paidRows),
+  };
+  const agencies = {
+    count: max((o) => o.agencies.count),
+    withLevel: max((o) => o.agencies.withLevel),
+    estimatedUsd: sum((o) => o.agencies.estimatedUsd),
+    paidUsd: sum((o) => o.agencies.paidUsd),
+    paidRows: sum((o) => o.agencies.paidRows),
+  };
+  const bd = a.bd;
+  return {
+    periodId: monthlyPeriodId,
+    bdMonth: a.bdMonth,
+    hosts,
+    agencies,
+    bd,
+    staff: a.staff,
+    grandEstimatedUsd: hosts.estimatedUsd + agencies.estimatedUsd + bd.estimatedUsd,
+    grandPaidUsd: hosts.paidUsd + agencies.paidUsd + bd.paidUsd,
   };
 }

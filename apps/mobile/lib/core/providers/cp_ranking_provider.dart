@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 class CPRankingModel {
   final String id;
@@ -57,7 +58,7 @@ final cpRankingsProvider = FutureProvider.family<List<CPRankingModel>, String>((
         .map((json) => CPRankingModel.fromJson(json))
         .toList();
   } catch (e) {
-    print('Error fetching CP Rankings ($type): $e');
+    devLog('Error fetching CP Rankings ($type): $e');
     return [];
   }
 });

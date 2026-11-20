@@ -60,13 +60,14 @@ export default async function WalletSettingsPage() {
           Wallet Control
         </h1>
         <p className="text-white/40 mt-2">
-          Full control for rates, withdrawals, payment methods, merchants & records
+          Full control for rates, withdrawals, payment methods, merchants, coin sellers & records
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <QuickLink href="/withdrawals" icon={Banknote} label="Withdrawals" />
-        <QuickLink href="/settings/wallet/merchants" icon={Store} label="Merchants" />
+        <QuickLink href="/merchants" icon={Store} label="Merchants" />
+        <QuickLink href="/settings/wallet/merchants" icon={Store} label="Coin sellers" />
         <QuickLink href="/settings/wallet/records" icon={ScrollText} label="Records" />
         <QuickLink href="/settings/exchange" icon={ArrowRightLeft} label="Diamond↔Coin" />
         <QuickLink href="/recharge" icon={Coins} label="Recharge packs" />

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
+import 'package:sk_live/core/widgets/copy_on_long_press.dart';
 import 'package:sk_live/core/providers/profile_provider.dart';
 import 'package:sk_live/core/providers/vip_provider.dart';
 import 'package:sk_live/core/router/app_router.dart';
@@ -292,10 +293,17 @@ class _UserProfileMiniSheetBodyState
                 spacing: 8,
                 runSpacing: 4,
                 children: [
-                  SpecialIdBadge(
-                    id: shortId,
-                    level: specialIdLevel,
-                    height: 20,
+                  // Long-press to copy: the ID in a room profile could be read
+                  // but not taken, so anyone wanting to pass it on had to
+                  // retype it from memory.
+                  CopyOnLongPress(
+                    text: shortId,
+                    borderRadius: BorderRadius.circular(10),
+                    child: SpecialIdBadge(
+                      id: shortId,
+                      level: specialIdLevel,
+                      height: 20,
+                    ),
                   ),
                   if (countryName != null)
                     Text(

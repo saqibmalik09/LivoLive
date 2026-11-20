@@ -3,13 +3,13 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   searchAdminRooms,
-  setRoomPinSlot,
+  setRoomPinned,
   updateRoomBanner,
   updateRoomLiveBackground,
   uploadRoomBannerImage,
   type AdminRoomRow,
 } from "@/app/settings/rooms/actions";
-import { Home, Loader2, Save, Search, Upload } from "lucide-react";
+import { Home, Loader2, Pin, PinOff, Save, Search, Upload } from "lucide-react";
 const inputClass =
   "w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-amber-500/50";
 const btnClass =
@@ -86,28 +86,26 @@ export function RoomBannerManager({ initialRooms }: { initialRooms: AdminRoomRow
       router.refresh();
     });
   }
-  async function assignPinSlot(slot: number) {
+  // One control, and one featured room. Picking a numbered slot meant knowing
+  // which card on the home screen each number drew, and the home screen now
+  // shows a single full-width card, so featuring a room replaces the current
+  // one rather than filling a second position.
+  async function togglePinned(pinned: boolean) {
     if (!selected) return;
     startTransition(async () => {
-      const res = await setRoomPinSlot(selected.id, slot);
+      const res = await setRoomPinned(selected.id, pinned);
       if (!res.success) {
-        alert(res.error ?? "Pin failed");
+        alert(res.error ?? (pinned ? "Pin failed" : "Unpin failed"));
         return;
       }
+      const slot = pinned ? Number(res.pinOrder ?? 0) : 0;
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id === selected.id) {
-            return {
-              ...r,
-              isPinned: slot > 0,
-              pinOrder: slot,
-            };
+            return { ...r, isPinned: pinned, pinOrder: slot };
           }
-          // Slot is exclusive — clear whoever previously held it.
-          if (slot > 0 && r.isPinned && r.pinOrder === slot) {
-            return { ...r, isPinned: false, pinOrder: 0 };
-          }
-          return r;
+          // Only one room is featured, so everything else is now unpinned.
+          return pinned && r.isPinned ? { ...r, isPinned: false, pinOrder: 0 } : r;
         }),
       );
       router.refresh();
@@ -153,7 +151,7 @@ export function RoomBannerManager({ initialRooms }: { initialRooms: AdminRoomRow
                     {room.title}
                     {room.isPinned ? (
                       <span className="shrink-0 text-[9px] font-black uppercase tracking-widest text-amber-300 bg-amber-500/15 border border-amber-400/30 px-1.5 py-0.5 rounded">
-                        Pin #{room.pinOrder || "?"}
+                        Featured
                       </span>
                     ) : null}
                   </p>
@@ -187,39 +185,36 @@ export function RoomBannerManager({ initialRooms }: { initialRooms: AdminRoomRow
               </div>
               <div>
                 <p className="text-[10px] font-black uppercase tracking-widest text-amber-300 mb-2">
-                  Party pin slot (Rave style)
+                  Feature on home
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  {[1, 2, 3].map((slot) => {
-                    const active = selected.isPinned && selected.pinOrder === slot;
-                    return (
-                      <button
-                        key={slot}
-                        type="button"
-                        disabled={pending}
-                        onClick={() => assignPinSlot(slot)}
-                        className={`min-w-[52px] px-4 py-2.5 rounded-xl font-black text-sm disabled:opacity-50 transition-colors ${
-                          active
-                            ? "bg-amber-500 text-black"
-                            : "bg-white/10 text-white border border-white/15 hover:bg-white/15"
-                        }`}
-                      >
-                        #{slot}
-                      </button>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    disabled={pending || !selected.isPinned}
-                    onClick={() => assignPinSlot(0)}
-                    className="px-4 py-2.5 rounded-xl font-bold text-sm bg-white/5 text-white/70 border border-white/10 hover:bg-white/10 disabled:opacity-40"
-                  >
-                    {pending ? <Loader2 size={14} className="animate-spin" /> : "Unpin"}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => togglePinned(!selected.isPinned)}
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-sm disabled:opacity-50 transition-colors ${
+                    selected.isPinned
+                      ? "bg-amber-500 text-black hover:bg-amber-400"
+                      : "bg-white/10 text-white border border-white/15 hover:bg-white/15"
+                  }`}
+                >
+                  {pending ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : selected.isPinned ? (
+                    <>
+                      <PinOff size={14} />
+                      Unpin from home
+                    </>
+                  ) : (
+                    <>
+                      <Pin size={14} />
+                      Pin to home
+                    </>
+                  )}
+                </button>
                 <p className="text-[11px] text-white/40 mt-2">
-                  Slot #1 is the big left card; #2 and #3 are the stacked right cards above the ranking
-                  podium. Only one room per slot.
+                  {selected.isPinned
+                    ? "Featured on the home screen above the room list."
+                    : "Shows this room on the home screen above the room list. Featuring a room replaces the one featured now."}
                 </p>
               </div>
             </div>

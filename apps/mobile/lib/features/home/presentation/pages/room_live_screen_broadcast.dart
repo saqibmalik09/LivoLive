@@ -1,3 +1,4 @@
+import 'package:sk_live/core/util/dev_log.dart';
 part of 'room_live_screen.dart';
 
 mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
@@ -169,7 +170,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
       final indexUsable =
           seatIndex != null && seatIndex >= 0 && seatIndex < _rb._seats.length;
       if (!indexUsable && leavingId != null && leavingId.isNotEmpty) {
-        print('[SEAT] broadcast leave without index — clear user=$leavingId');
+        devLog('[SEAT] broadcast leave without index — clear user=$leavingId');
         _rb._lastSeatBroadcastAt = DateTime.now();
         RoomSeatSyncService.markVacated(
           _rb._recentlyVacatedSeatUsers,
@@ -199,7 +200,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
     }
 
     if (seatIndex == null || seatIndex < 0 || seatIndex >= _rb._seats.length) {
-      print(
+      devLog(
         '[SEAT] broadcast ignored bad index action=$action '
         'seatIndex=$seatIndex raw=$rawIndex',
       );
@@ -210,7 +211,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
         ? payload['is_muted'] == true
         : payload['isMuted'] == true;
     _rb._lastSeatBroadcastAt = DateTime.now();
-    print(
+    devLog(
       '[SEAT] broadcast apply action=$action seat=$seatIndex '
       'user=${payload['user_id']} muted=$mutedFlag '
       'mySeat=${_rb._mySeatIndex}',
@@ -249,7 +250,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
           if (sitUserId == myId) {
             _rb._mySeatIndex = seatIndex;
             _rb._isMuted = mutedFlag;
-            print('[SEAT] broadcast SELF sit → mySeat=$seatIndex');
+            devLog('[SEAT] broadcast SELF sit → mySeat=$seatIndex');
           }
         case 'leave':
           final leavingId =
@@ -261,7 +262,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
           );
           if (_rb._seats[seatIndex]['user_id']?.toString() == myId ||
               leavingId == myId) {
-            print(
+            devLog(
               '[SEAT] broadcast SELF leave seat=$seatIndex '
               'leavingId=$leavingId → mySeat=null',
             );
@@ -413,12 +414,12 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
       }
       _rb._lastSeatBroadcastAt = DateTime.now();
       if (res?['ok'] != true) {
-        print(
+        devLog(
           '[SEAT] gateway ack FAIL action=$action seat=$seatIndex res=$res',
         );
         return false;
       }
-      print('[SEAT] gateway ack OK action=$action seat=$seatIndex res=$res');
+      devLog('[SEAT] gateway ack OK action=$action seat=$seatIndex res=$res');
       if ((action == 'sit' || action == 'take') && mounted) {
         final seatsRaw = res?['seats'];
         final seatRaw = res?['seat'];
@@ -429,7 +430,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
             else if (seatRaw is Map)
               'seats': [Map<String, dynamic>.from(seatRaw)],
           };
-          print('[SEAT] applying claim-ack seats immediately');
+          devLog('[SEAT] applying claim-ack seats immediately');
           _rb._applyGatewaySnapshot(snap);
         }
       }
@@ -678,7 +679,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
       if (nextMicCount != prevMicCount) {
         _rb._initSeats(source: 'room_meta_broadcast');
       } else {
-        print(
+        devLog(
           '[SEAT] room_meta mic_count unchanged ($nextMicCount) — skip initSeats',
         );
       }

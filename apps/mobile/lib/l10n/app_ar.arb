@@ -63,6 +63,7 @@
   "profile_cpNest": "عش CP",
   "profile_buddies": "الأصدقاء",
   "profile_resellerPanel": "لوحة الموزع",
+  "profile_merchantPanel": "لوحة التاجر",
   "profile_accountManagement": "إدارة الحساب",
   "profile_staffCenter": "مركز {role}",
   "@profile_staffCenter": {
@@ -91,6 +92,9 @@
   "auth_resendCode": "إعادة إرسال الرمز",
   "auth_verificationSuccessful": "تم التحقق بنجاح!",
   "auth_completeProfileTitle": "أكمل ملفك الشخصي",
+  "auth_selectGender": "اختر جنسك",
+  "auth_genderMale": "ذكر",
+  "auth_genderFemale": "أنثى",
   "auth_nickname": "الاسم المستعار",
   "auth_hintEnter": "أدخل",
   "auth_basicInformation": "المعلومات الأساسية",
@@ -239,6 +243,14 @@
   "party_mineTitle": "خاصتي",
   "party_tabHot": "الأكثر رواجًا",
   "party_tabRoom": "غرفة",
+  "party_tabEvent": "فعالية",
+  "profile_coin": "عملة",
+  "home_selectCountry": "اختر الدولة",
+  "home_regionMiddleEast": "الشرق الأوسط",
+  "home_regionAsia": "آسيا",
+  "home_regionAmerica": "أمريكا",
+  "home_regionEurope": "أوروبا",
+  "home_regionAfrica": "أفريقيا",
   "party_tooltipRanking": "الترتيب",
   "party_tooltipSearch": "بحث",
   "party_tooltipMyRoom": "غرفتي",
@@ -646,5 +658,7 @@
   "blacklist_unblock": "إلغاء الحظر",
   "blacklist_unblocked": "تم إلغاء حظر المستخدم",
   "blacklist_noRoom": "ليس لديك غرفة بعد",
-  "chat_blockedCannotMessage": "لا يمكنك إرسال أو استقبال رسائل في هذه المحادثة."
+  "chat_blockedCannotMessage": "لا يمكنك إرسال أو استقبال رسائل في هذه المحادثة.",
+  "topBanner_leaveRoomConfirm": "هل أنت متأكد أنك تريد مغادرة هذه الغرفة؟",
+  "topBanner_enterRoomConfirm": "هل تريد الدخول إلى هذه الغرفة؟"
 }

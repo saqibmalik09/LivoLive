@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sk_live/core/auth/boot_session.dart';
 import 'package:sk_live/core/services/auth_service.dart';
 
 class SecureSupabaseLocalStorage extends LocalStorage {
@@ -67,6 +70,7 @@ class SecureSupabaseLocalStorage extends LocalStorage {
         _storage.delete(key: persistSessionKey),
         _storage.delete(key: _backupKey),
       ]);
+      unawaited(BootSession.clearCachedUserId());
       return;
     }
 
@@ -80,5 +84,7 @@ class SecureSupabaseLocalStorage extends LocalStorage {
       _storage.write(key: persistSessionKey, value: persistSessionString),
       _storage.write(key: _backupKey, value: persistSessionString),
     ]);
+    final userId = BootSession.userIdFromPersistedSession(persistSessionString);
+    if (userId != null) unawaited(BootSession.rememberUserId(userId));
   }
 }

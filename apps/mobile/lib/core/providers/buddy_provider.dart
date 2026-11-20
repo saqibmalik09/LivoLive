@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/provider_cache.dart';
@@ -40,6 +40,33 @@ enum BuddyTier {
         return 'You can invite friends with over 2M intimacy and mutual follows to become Bestie';
       case BuddyTier.homie:
         return 'You can invite friends with over 5M intimacy and mutual follows to become Homie';
+    }
+  }
+
+  /// Icon for the tier, shown on the Buddies tabs.
+  ///
+  /// The three tiers were named in plain text with nothing to tell them apart
+  /// at a glance. Each now carries its own mark and colour.
+  IconData get icon {
+    switch (this) {
+      case BuddyTier.friend:
+        return Icons.person_rounded;
+      case BuddyTier.bestie:
+        return Icons.favorite_rounded;
+      case BuddyTier.homie:
+        return Icons.local_fire_department_rounded;
+    }
+  }
+
+  /// Two-stop gradient for the tier's icon badge, light stop first.
+  List<Color> get colors {
+    switch (this) {
+      case BuddyTier.friend:
+        return const [Color(0xFF7EC4FF), Color(0xFF2574D6)];
+      case BuddyTier.bestie:
+        return const [Color(0xFFFF8FA8), Color(0xFFD62246)];
+      case BuddyTier.homie:
+        return const [Color(0xFFFFC46E), Color(0xFFE07A00)];
     }
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -20,11 +21,42 @@ class RoomSharedAudioSyncController {
        _onLocalStateUpdate = onLocalStateUpdate,
        _broadcastState = broadcastState,
        _player = AudioPlayer(
+         // Both flags stay off on purpose: the room's audio session belongs to
+         // LiveKit, and just_audio must neither take audio focus from it nor
+         // inherit its attributes.
          handleInterruptions: false,
          androidApplyAudioAttributes: false,
        ) {
     _liveControllers.add(this);
     _bindPlayerStreams();
+    _pinMusicAudioAttributes();
+  }
+
+  /// Pins the song player to the media stream.
+  ///
+  /// LiveKit puts the Android audio session in communication mode whenever a
+  /// mic is live, which is correct for voice but routes *every* stream with
+  /// unspecified attributes down the narrow, quiet voice-call path — so songs
+  /// came out thin and far too soft for anyone holding a mic.
+  ///
+  /// Letting just_audio apply attributes automatically would make it worse: it
+  /// copies them from that same session, so the music would be tagged as voice
+  /// communication explicitly. Setting them here instead keeps the song on
+  /// `media`/`music` regardless of what the voice session is doing, and does
+  /// not touch the session itself.
+  void _pinMusicAudioAttributes() {
+    unawaited(
+      _player
+          .setAndroidAudioAttributes(
+            const AndroidAudioAttributes(
+              contentType: AndroidAudioContentType.music,
+              usage: AndroidAudioUsage.media,
+            ),
+          )
+          .catchError((Object e) {
+            debugPrint('[song] could not pin media audio attributes: $e');
+          }),
+    );
   }
 
   static const double _catchUpBehindThreshold = 2.5;

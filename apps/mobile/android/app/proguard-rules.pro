@@ -3,6 +3,10 @@
 -keep class io.flutter.plugins.** { *; }
 -dontwarn io.flutter.embedding.**
 
+-keep class org.libpag.** { *; }
+-keep class com.example.flutter_pag_plugin.** { *; }
+-dontwarn org.libpag.**
+
 # Firebase / Play
 -keep class com.google.firebase.** { *; }
 -keep class com.google.android.gms.** { *; }

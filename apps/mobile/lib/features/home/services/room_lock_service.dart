@@ -7,6 +7,8 @@ import 'package:sk_live/core/providers/staff_provider.dart';
 import 'package:sk_live/core/services/room_floating_bubble_service.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
 import 'package:sk_live/core/services/orbit_voice_session_service.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/widgets/room_background_media.dart';
 import 'package:sk_live/features/home/presentation/pages/room_live_screen.dart';
 
 bool roomIsLocked(Map<String, dynamic> room) {
@@ -148,38 +150,78 @@ Future<void> openRoomLive(
   bool replace = false,
 }) async {
   final roomId = room['id']?.toString();
-  if (roomId != null && roomId.isNotEmpty) {
-    OrbitVoiceSessionService.prefetchSession(roomId);
-  }
-  if (!skipLockCheck) {
+  // Same rule as the fast client: a locked room asks for the password
+  // before it opens. Everything else opens on the tap. The room screen
+  // still confirms the lock on its first frame.
+  if (!skipLockCheck && room['is_locked'] == true) {
     final allowed = await ensureRoomUnlockedForEntry(context, room);
     if (!allowed || !context.mounted) return;
-    if (roomId != null && roomId.isNotEmpty) {
-      OrbitVoiceSessionService.claimPrefetch(roomId);
-    }
-  } else if (roomId != null) {
+  } else if (skipLockCheck && roomId != null) {
     _markRoomUnlocked(roomId);
   }
   if (!context.mounted) return;
-  await AppTelemetry.traceAsync(
-    'room_enter',
-    () async {
-      if (roomId != null) {
-        unawaited(RoomFloatingBubbleService.hideRoomBubble());
-        unawaited(AppTelemetry.setContext(roomId: roomId, screen: 'room_live'));
-      }
-      final route = MaterialPageRoute(
-        builder: (_) => RoomLiveScreen(room: Map<String, dynamic>.from(room)),
-      );
-      if (replace) {
-        await Navigator.pushReplacement(context, route);
-      } else {
-        await Navigator.push(context, route);
-      }
-    },
-    keys: {'room_id': roomId ?? 'unknown'},
-    slowMs: 8000,
+
+  final route = PageRouteBuilder<void>(
+    pageBuilder: (_, _, _) => ColoredBox(
+      color: roomBackdropColor,
+      child: _RoomEnterShell(room: Map<String, dynamic>.from(room)),
+    ),
+    transitionDuration: Duration.zero,
+    reverseTransitionDuration: const Duration(milliseconds: 180),
   );
+  final Future<void> pushed = replace
+      ? Navigator.pushReplacement(context, route)
+      : Navigator.push(context, route);
+
+  // Voice prefetch and telemetry used to run before the route existed,
+  // so the tap sat on the listing until they returned.
+  if (roomId != null && roomId.isNotEmpty) {
+    Future<void>(() {
+      OrbitVoiceSessionService.prefetchSession(roomId);
+      OrbitVoiceSessionService.claimPrefetch(roomId);
+      unawaited(RoomFloatingBubbleService.hideRoomBubble());
+      unawaited(AppTelemetry.setContext(roomId: roomId, screen: 'room_live'));
+    });
+  }
+  await pushed;
+}
+
+/// First frame is only the cover. The live screen mounts on the next frame,
+/// so the tap is answered before seats, voice, and chat are constructed.
+class _RoomEnterShell extends StatefulWidget {
+  const _RoomEnterShell({required this.room});
+
+  final Map<String, dynamic> room;
+
+  @override
+  State<_RoomEnterShell> createState() => _RoomEnterShellState();
+}
+
+class _RoomEnterShellState extends State<_RoomEnterShell> {
+  bool _live = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _live = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_live) return RoomLiveScreen(room: widget.room);
+    final background = widget.room['background_url']?.toString() ?? '';
+    final cover = widget.room['image_url']?.toString() ?? '';
+    final url = background.isNotEmpty ? background : cover;
+    final still = url.isNotEmpty && !MediaUrlUtil.isSvgaUrl(url);
+    return Scaffold(
+      backgroundColor: roomBackdropColor,
+      body: still
+          ? RoomBackgroundMedia(url: url, fit: BoxFit.cover, darkenAlpha: 0.2)
+          : const RoomDefaultBackground(fit: BoxFit.cover, darkenAlpha: 0.2),
+    );
+  }
 }
 
 class _RoomLockPasswordDialog extends StatefulWidget {

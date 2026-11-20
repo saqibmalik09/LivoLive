@@ -81,6 +81,7 @@
   "profile_cpNest": "Sarang CP",
   "profile_buddies": "Teman",
   "profile_resellerPanel": "Panel Pengecer",
+  "profile_merchantPanel": "Panel Merchant",
   "profile_accountManagement": "Manajemen Akun",
   "profile_staffCenter": "{role} Pusat",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "Kirim Ulang Kode",
   "auth_verificationSuccessful": "Verifikasi Berhasil!",
   "auth_completeProfileTitle": "Lengkapi profil Anda",
+  "auth_selectGender": "Pilih jenis kelamin",
+  "auth_genderMale": "Laki-laki",
+  "auth_genderFemale": "Perempuan",
   "auth_nickname": "Nama panggilan",
   "auth_hintEnter": "Memasuki",
   "auth_basicInformation": "Informasi Dasar",
@@ -257,6 +261,14 @@
   "party_mineTitle": "Milikku",
   "party_tabHot": "Panas",
   "party_tabRoom": "Ruang",
+  "party_tabEvent": "Acara",
+  "profile_coin": "Koin",
+  "home_selectCountry": "Pilih negara",
+  "home_regionMiddleEast": "Timur Tengah",
+  "home_regionAsia": "Asia",
+  "home_regionAmerica": "Amerika",
+  "home_regionEurope": "Eropa",
+  "home_regionAfrica": "Afrika",
   "party_tooltipRanking": "Peringkat",
   "party_tooltipSearch": "Mencari",
   "party_tooltipMyRoom": "Kamarku",
@@ -646,5 +658,7 @@
   "blacklist_unblock": "Unblock",
   "blacklist_unblocked": "User unblocked",
   "blacklist_noRoom": "You don't have a room yet",
-  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat."
+  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat.",
+  "topBanner_leaveRoomConfirm": "Apakah Anda yakin ingin meninggalkan room ini?",
+  "topBanner_enterRoomConfirm": "Apakah Anda ingin masuk ke room ini?"
 }

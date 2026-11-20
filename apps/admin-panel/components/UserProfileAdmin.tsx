@@ -170,11 +170,9 @@ export function UserProfileAdmin({
   const [roomImage, setRoomImage] = useState(hostRoom?.imageUrl ?? "");
   const [roomBg, setRoomBg] = useState(hostRoom?.backgroundUrl ?? "");
   const [roomDecorationId, setRoomDecorationId] = useState(hostRoom?.decorationId ?? "");
-  const [roomPinSlot, setRoomPinSlot] = useState(
-    hostRoom?.isPinned && hostRoom.pinOrder >= 1 && hostRoom.pinOrder <= 3
-      ? String(hostRoom.pinOrder)
-      : "0",
-  );
+  // Featured or not — the home position is assigned automatically, so there is
+  // one pin control in the panel rather than a set of numbered slots.
+  const [roomFeatured, setRoomFeatured] = useState(hostRoom?.isPinned === true);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const roomImageInputRef = useRef<HTMLInputElement>(null);
@@ -1060,16 +1058,14 @@ export function UserProfileAdmin({
               </select>
             </label>
             <label className="block space-y-1.5 md:col-span-2">
-              <span className={labelClass}>Party pin slot (1 / 2 / 3)</span>
+              <span className={labelClass}>Feature on home</span>
               <select
                 className={inputClass}
-                value={roomPinSlot}
-                onChange={(e) => setRoomPinSlot(e.target.value)}
+                value={roomFeatured ? "1" : "0"}
+                onChange={(e) => setRoomFeatured(e.target.value === "1")}
               >
-                <option value="0">Not pinned</option>
-                <option value="1">Pin #1 — big left card</option>
-                <option value="2">Pin #2 — top right</option>
-                <option value="3">Pin #3 — bottom right</option>
+                <option value="0">Not featured</option>
+                <option value="1">Featured on home</option>
               </select>
             </label>
           </div>
@@ -1084,7 +1080,7 @@ export function UserProfileAdmin({
                     image_url: roomImage,
                     background_url: roomBg,
                     decoration_id: roomDecorationId || null,
-                    pin_slot: Number(roomPinSlot),
+                    is_pinned: roomFeatured,
                   }),
                 )
               }

@@ -1,8 +1,7 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
-import { getPeriodSalaryOverview } from "@/lib/salary-hub/queries";
-import { periodToBdMonth } from "@/lib/salary-hub/constants";
+import { getPeriodSalaryOverview, resolveBdPeriodId } from "@/lib/salary-hub/queries";
 export async function fetchPeriodSalaryOverview(periodId: string) {
   try {
     const data = await getPeriodSalaryOverview(periodId);
@@ -50,8 +49,8 @@ export async function executeSalaryPayout(periodId: string) {
 }
 export async function executeBdSalaryPayout(periodId: string) {
   try {
-    const ym = periodToBdMonth(periodId);
-    if (!/^\d{4}-\d{2}-[AB]$/i.test(ym) && !/^\d{4}-\d{2}$/.test(ym)) {
+    const ym = await resolveBdPeriodId(periodId);
+    if (!/^\d{4}-\d{2}-[ABM]$/i.test(ym) && !/^\d{4}-\d{2}$/.test(ym)) {
       return {
         success: false as const,
         error: `Invalid BD period from: ${periodId}`,

@@ -6,6 +6,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 enum UploadCropAspect { square, landscape16x9, portrait9x16 }
 
@@ -283,7 +284,7 @@ class UploadService {
       final String publicUrl = _supabase.storage
           .from(bucket)
           .getPublicUrl(filePath);
-      print('--- [DEBUG] Uploaded to Storage, Public URL: $publicUrl');
+      devLog('--- [DEBUG] Uploaded to Storage, Public URL: $publicUrl');
 
       if (updateUser) {
         final updateData = profileIsAvatar

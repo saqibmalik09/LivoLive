@@ -233,6 +233,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get profile_resellerPanel => 'Reseller Panel';
 
   @override
+  String get profile_merchantPanel => 'Merchant Panel';
+
+  @override
   String get profile_accountManagement => 'Account Management';
 
   @override
@@ -297,6 +300,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'Complete your profile';
+
+  @override
+  String get auth_selectGender => 'Select your gender';
+
+  @override
+  String get auth_genderMale => 'Male';
+
+  @override
+  String get auth_genderFemale => 'Female';
 
   @override
   String get auth_nickname => 'Nickname';
@@ -616,6 +628,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'Room';
+
+  @override
+  String get party_tabEvent => 'Event';
+
+  @override
+  String get profile_coin => 'Coin';
+
+  @override
+  String get home_selectCountry => 'Select country';
+
+  @override
+  String get home_regionMiddleEast => 'Middle East';
+
+  @override
+  String get home_regionAsia => 'Asia';
+
+  @override
+  String get home_regionAmerica => 'America';
+
+  @override
+  String get home_regionEurope => 'Europe';
+
+  @override
+  String get home_regionAfrica => 'Africa';
 
   @override
   String get party_tooltipRanking => 'Ranking';
@@ -1610,4 +1646,11 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'Are you sure you want to leave this room?';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'Do you want to enter this room?';
 }

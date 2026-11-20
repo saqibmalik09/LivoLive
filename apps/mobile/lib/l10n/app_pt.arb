@@ -81,6 +81,7 @@
   "profile_cpNest": "Ninho CP",
   "profile_buddies": "Amigos",
   "profile_resellerPanel": "Painel de Revendedor",
+  "profile_merchantPanel": "Painel do Comerciante",
   "profile_accountManagement": "Gerenciamento de contas",
   "profile_staffCenter": "{role} Centro",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "Reenviar código",
   "auth_verificationSuccessful": "Verificação bem-sucedida!",
   "auth_completeProfileTitle": "Complete seu perfil",
+  "auth_selectGender": "Selecione seu gênero",
+  "auth_genderMale": "Masculino",
+  "auth_genderFemale": "Feminino",
   "auth_nickname": "Apelido",
   "auth_hintEnter": "Digitar",
   "auth_basicInformation": "Informações Básicas",
@@ -257,6 +261,14 @@
   "party_mineTitle": "Meu",
   "party_tabHot": "Quente",
   "party_tabRoom": "Sala",
+  "party_tabEvent": "Evento",
+  "profile_coin": "Moeda",
+  "home_selectCountry": "Selecionar país",
+  "home_regionMiddleEast": "Oriente Médio",
+  "home_regionAsia": "Ásia",
+  "home_regionAmerica": "América",
+  "home_regionEurope": "Europa",
+  "home_regionAfrica": "África",
   "party_tooltipRanking": "Classificação",
   "party_tooltipSearch": "Procurar",
   "party_tooltipMyRoom": "Meu quarto",
@@ -635,5 +647,7 @@
   "event_lastWeekList": "Lista da semana passada",
   "event_skHostParty": "Festa Anfitriã Livo",
   "event_noRewardLastPeriod": "Nenhuma recompensa disponível para o último período de atividade.",
-  "home_noRankedRoom": "Nenhuma sala classificada disponível no momento"
+  "home_noRankedRoom": "Nenhuma sala classificada disponível no momento",
+  "topBanner_leaveRoomConfirm": "Tem certeza de que deseja sair desta sala?",
+  "topBanner_enterRoomConfirm": "Deseja entrar nesta sala?"
 }

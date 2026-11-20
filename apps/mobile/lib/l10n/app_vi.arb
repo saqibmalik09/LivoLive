@@ -81,6 +81,7 @@
   "profile_cpNest": "CP Tổ",
   "profile_buddies": "bạn bè",
   "profile_resellerPanel": "Bảng điều khiển đại lý",
+  "profile_merchantPanel": "Bảng điều khiển thương gia",
   "profile_accountManagement": "Quản lý tài khoản",
   "profile_staffCenter": "{role} Trung tâm",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "Gửi lại mã",
   "auth_verificationSuccessful": "Xác minh thành công!",
   "auth_completeProfileTitle": "Hoàn thiện hồ sơ của bạn",
+  "auth_selectGender": "Chọn giới tính",
+  "auth_genderMale": "Nam",
+  "auth_genderFemale": "Nữ",
   "auth_nickname": "Biệt hiệu",
   "auth_hintEnter": "Đi vào",
   "auth_basicInformation": "Thông tin cơ bản",
@@ -257,6 +261,14 @@
   "party_mineTitle": "Của tôi",
   "party_tabHot": "Nóng",
   "party_tabRoom": "Phòng",
+  "party_tabEvent": "Sự kiện",
+  "profile_coin": "Xu",
+  "home_selectCountry": "Chọn quốc gia",
+  "home_regionMiddleEast": "Trung Đông",
+  "home_regionAsia": "Châu Á",
+  "home_regionAmerica": "Châu Mỹ",
+  "home_regionEurope": "Châu Âu",
+  "home_regionAfrica": "Châu Phi",
   "party_tooltipRanking": "Xếp hạng",
   "party_tooltipSearch": "Tìm kiếm",
   "party_tooltipMyRoom": "Phòng của tôi",
@@ -635,5 +647,7 @@
   "event_lastWeekList": "Danh sách tuần trước",
   "event_skHostParty": "Bên tổ chức Livo",
   "event_noRewardLastPeriod": "Không có phần thưởng cho thời gian hoạt động cuối cùng.",
-  "home_noRankedRoom": "Hiện tại không có phòng xếp hạng nào"
+  "home_noRankedRoom": "Hiện tại không có phòng xếp hạng nào",
+  "topBanner_leaveRoomConfirm": "Bạn có chắc chắn muốn rời khỏi phòng này không?",
+  "topBanner_enterRoomConfirm": "Bạn có muốn vào phòng này không?"
 }

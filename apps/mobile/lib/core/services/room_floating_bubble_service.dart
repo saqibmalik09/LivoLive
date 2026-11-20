@@ -144,12 +144,28 @@ class RoomFloatingBubbleService {
     return overlayConfirmedActive;
   }
 
+  /// Whether the minimised room may draw a floating bubble OVER other apps.
+  ///
+  /// Turned off: the bubble only ever appeared once the app was backgrounded,
+  /// so it sat on top of whatever the user did next — people could not use
+  /// WhatsApp without a LIVO logo in the way. Minimising now keeps the room
+  /// alive silently and the user returns by reopening the app. Flip this back
+  /// to true to restore the system overlay.
+  static const bool showsSystemOverlayBubble = false;
+
   static Future<bool> showRoomBubble({
     required String roomId,
     required String title,
     String? imageUrl,
     bool muted = false,
   }) async {
+    if (!showsSystemOverlayBubble) {
+      // The room itself keeps running; only the over-other-apps window is
+      // suppressed. Cache the id so returning to the app restores the room.
+      unawaited(RoomBubbleNativeBridge.cacheRoomId(roomId));
+      overlayConfirmedActive = false;
+      return false;
+    }
     if (!isSupported) return false;
 
     final pending = _showLock;

@@ -25,10 +25,10 @@ export default async function WalletMerchantsPage() {
       <div>
         <h1 className="text-5xl font-black tracking-tighter italic flex items-center gap-4">
           <Store size={48} className="text-sky-400" />
-          Coin Merchants
+          Coin Sellers
         </h1>
         <p className="text-white/40 mt-2">
-          Users with reseller flag — shown in app Coin Merchant List
+          Users with the reseller flag — shown in the app's Coin Merchant list. Supplied by merchants; manage the merchant tier under Settings → Merchants.
         </p>
       </div>
 

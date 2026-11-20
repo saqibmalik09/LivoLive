@@ -81,6 +81,7 @@
   "profile_cpNest": "CP Yuvası",
   "profile_buddies": "Arkadaşlar",
   "profile_resellerPanel": "Bayi Paneli",
+  "profile_merchantPanel": "Satıcı Paneli",
   "profile_accountManagement": "Hesap Yönetimi",
   "profile_staffCenter": "{role} Merkez",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "Kodu Yeniden Gönder",
   "auth_verificationSuccessful": "Doğrulama Başarılı!",
   "auth_completeProfileTitle": "Profilinizi tamamlayın",
+  "auth_selectGender": "Cinsiyetinizi seçin",
+  "auth_genderMale": "Erkek",
+  "auth_genderFemale": "Kadın",
   "auth_nickname": "Takma ad",
   "auth_hintEnter": "Girmek",
   "auth_basicInformation": "Temel Bilgiler",
@@ -257,6 +261,14 @@
   "party_mineTitle": "Bana ait",
   "party_tabHot": "Sıcak",
   "party_tabRoom": "Oda",
+  "party_tabEvent": "Etkinlik",
+  "profile_coin": "Jeton",
+  "home_selectCountry": "Ülke seç",
+  "home_regionMiddleEast": "Orta Doğu",
+  "home_regionAsia": "Asya",
+  "home_regionAmerica": "Amerika",
+  "home_regionEurope": "Avrupa",
+  "home_regionAfrica": "Afrika",
   "party_tooltipRanking": "Sıralama",
   "party_tooltipSearch": "Aramak",
   "party_tooltipMyRoom": "Benim Odam",
@@ -646,5 +658,7 @@
   "blacklist_unblock": "Unblock",
   "blacklist_unblocked": "User unblocked",
   "blacklist_noRoom": "You don't have a room yet",
-  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat."
+  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat.",
+  "topBanner_leaveRoomConfirm": "Bu odadan ayrılmak istediğinizden emin misiniz?",
+  "topBanner_enterRoomConfirm": "Bu odaya girmek istiyor musunuz?"
 }

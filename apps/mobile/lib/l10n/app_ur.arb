@@ -81,6 +81,7 @@
   "profile_cpNest": "CP Nest",
   "profile_buddies": "دوست",
   "profile_resellerPanel": "ری سیلر پینل",
+  "profile_merchantPanel": "مرچنٹ پینل",
   "profile_accountManagement": "اکاؤنٹ مینجمنٹ",
   "profile_staffCenter": "{role} مرکز",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "کوڈ دوبارہ بھیجیں۔",
   "auth_verificationSuccessful": "توثیق کامیاب!",
   "auth_completeProfileTitle": "اپنا پروفائل مکمل کریں۔",
+  "auth_selectGender": "اپنی جنس منتخب کریں",
+  "auth_genderMale": "مرد",
+  "auth_genderFemale": "عورت",
   "auth_nickname": "عرفی نام",
   "auth_hintEnter": "داخل کریں۔",
   "auth_basicInformation": "بنیادی معلومات",
@@ -257,6 +261,14 @@
   "party_mineTitle": "میرا",
   "party_tabHot": "گرم",
   "party_tabRoom": "کمرہ",
+  "party_tabEvent": "ایونٹ",
+  "profile_coin": "سکہ",
+  "home_selectCountry": "ملک منتخب کریں",
+  "home_regionMiddleEast": "مشرق وسطیٰ",
+  "home_regionAsia": "ایشیا",
+  "home_regionAmerica": "امریکہ",
+  "home_regionEurope": "یورپ",
+  "home_regionAfrica": "افریقہ",
   "party_tooltipRanking": "درجہ بندی",
   "party_tooltipSearch": "تلاش کریں۔",
   "party_tooltipMyRoom": "میرا کمرہ",
@@ -646,5 +658,7 @@
   "blacklist_unblock": "Unblock",
   "blacklist_unblocked": "User unblocked",
   "blacklist_noRoom": "You don't have a room yet",
-  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat."
+  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat.",
+  "topBanner_leaveRoomConfirm": "کیا آپ واقعی اس روم سے نکلنا چاہتے ہیں؟",
+  "topBanner_enterRoomConfirm": "کیا آپ اس روم میں جانا چاہتے ہیں؟"
 }

@@ -1,13 +1,17 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:sk_live/core/constants/app_layout.dart';
 import 'package:sk_live/core/l10n/l10n_ext.dart';
+import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/party_people_provider.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/features/home/presentation/widgets/party_profile_card.dart';
-import 'package:sk_live/features/home/presentation/widgets/party_screen_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_tab_bar.dart';
+import 'package:sk_live/features/home/presentation/widgets/party_ref_widgets.dart';
 import 'package:sk_live/features/home/services/room_lock_service.dart';
 
 enum PartyFeedFilter { people, following, joined, recently }
@@ -20,14 +24,18 @@ class SocialDiscoverScreen extends ConsumerStatefulWidget {
       _SocialDiscoverScreenState();
 }
 
-class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
+class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen>
+    with SingleTickerProviderStateMixin {
   PartyFeedFilter _filter = PartyFeedFilter.people;
+
+  late final TabController _titleTab = TabController(length: 1, vsync: this);
   bool _isSearching = false;
   final _searchController = TextEditingController();
   String _searchQuery = '';
 
   @override
   void dispose() {
+    _titleTab.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -82,14 +90,36 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
     await openRoomLive(context, Map<String, dynamic>.from(room));
   }
 
+  String? _roomCountry(PartyProfileEntry featured) {
+    final room = featured.room;
+    final own = room?['country_code']?.toString().trim() ?? '';
+    if (own.isNotEmpty) return own;
+    if (room != null && room['host_id']?.toString() == featured.userId) {
+      return ref
+          .watch(userProfileProvider)
+          .valueOrNull?['country_code']
+          ?.toString();
+    }
+    return null;
+  }
+
   Widget _buildSpotlightCard() {
     final featuredAsync = ref.watch(partyFeaturedUserProvider);
     return featuredAsync.when(
       data: (featured) => featured == null
           ? const SizedBox.shrink()
-          : _SpotlightCard(
-              entry: featured,
-              onTap: () => _openFeaturedRoom(featured),
+          : Center(
+              child: PartyRefMyRoomCard(
+                name: featured.username,
+                roomTitle:
+                    featured.roomTitle != null && featured.roomTitle!.isNotEmpty
+                    ? featured.roomTitle!
+                    : 'Tap to open your room',
+                avatarUrl: featured.avatarUrl,
+                tagLabel: 'My room',
+                countryCode: _roomCountry(featured),
+                onTap: () => _openFeaturedRoom(featured),
+              ),
             ),
       loading: () => const SizedBox(height: 8),
       error: (_, _) => const SizedBox.shrink(),
@@ -151,6 +181,7 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
   @override
   Widget build(BuildContext context) {
     final feedAsync = _feedForFilter();
+    final s = PartyRefLayout.scaleOf(context);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -160,6 +191,10 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
         elevation: 0,
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        titleSpacing: 0,
+        leadingWidth: 0,
+        automaticallyImplyLeading: false,
         toolbarHeight: 60,
         title: _isSearching
             ? TextField(
@@ -173,13 +208,9 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
                 style: const TextStyle(color: AppColors.textPrimary),
                 onChanged: (v) => setState(() => _searchQuery = v.trim()),
               )
-            : Text(
-                context.l10n.social_discover,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
+            : HomeRefTabBar(
+                controller: _titleTab,
+                labels: [context.l10n.social_discover],
               ),
         actions: [
           if (_isSearching)
@@ -190,18 +221,34 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
           else
             IconButton(
               onPressed: () => setState(() => _isSearching = true),
-              icon: const Icon(Iconsax.search_normal, color: AppColors.primary),
+              icon: HomeRefTabBar.rowIcon(
+                context,
+                Image.asset(
+                  'assets/design/home/top_search_gold.webp',
+                  width: 26,
+                  height: 26,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
+              ),
             ),
-          const SizedBox(width: 8),
+          SizedBox(width: math.max(0, 68 * s - 24)),
         ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const PartyScreenBackground(),
+          const HomeRefBackground(
+            tabKey: 'party',
+            headerBottom: 230,
+            fadeEnd: 340,
+            dragonFadeFrom: 240,
+          ),
           Column(
             children: [
-              SizedBox(height: MediaQuery.of(context).padding.top + 60),
+              SizedBox(
+                height: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+              ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _onRefresh,
@@ -209,15 +256,16 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: EdgeInsets.fromLTRB(
-                      12,
-                      8,
-                      12,
+                      0,
+                      4,
+                      0,
                       homeTabScrollBottomPadding(context),
                     ),
                     children: [
                       if (!_isSearching) _buildSpotlightCard(),
+                      SizedBox(height: PartyRefLayout.cardToChips * s),
                       _buildFilterPills(),
-                      const SizedBox(height: 10),
+                      SizedBox(height: PartyRefLayout.chipsToFeed * s),
                       _buildFeedBody(feedAsync),
                     ],
                   ),
@@ -251,149 +299,11 @@ class _SocialDiscoverScreenState extends ConsumerState<SocialDiscoverScreen> {
       PartyFeedFilter.recently: 'Recently',
     };
 
-    return SizedBox(
-      height: 32,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: 4),
-        children: PartyFeedFilter.values.map((f) {
-          final active = _filter == f;
-          return Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: GestureDetector(
-              onTap: () => setState(() => _filter = f),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: active ? AppColors.accent : Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.accent, width: 1),
-                  boxShadow: active
-                      ? [
-                          BoxShadow(
-                            color: AppColors.accent.withValues(alpha: 0.25),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          ),
-                        ]
-                      : null,
-                ),
-                child: Text(
-                  labels[f]!,
-                  style: TextStyle(
-                    color: active ? Colors.white : AppColors.accent,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    height: 1.1,
-                  ),
-                ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
-
-class _SpotlightCard extends StatelessWidget {
-  const _SpotlightCard({required this.entry, required this.onTap});
-
-  final PartyProfileEntry entry;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF4A148C), Color(0xFF1A237E)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          boxShadow: AppColors.cardShadow,
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 32,
-              backgroundColor: Colors.white24,
-              backgroundImage:
-                  entry.avatarUrl != null && entry.avatarUrl!.isNotEmpty
-                  ? CachedNetworkImageProvider(entry.avatarUrl!)
-                  : null,
-              child: entry.avatarUrl == null || entry.avatarUrl!.isEmpty
-                  ? const Icon(Iconsax.user, color: Colors.white, size: 28)
-                  : null,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Colors.amber.withValues(alpha: 0.5),
-                          ),
-                        ),
-                        child: const Text(
-                          'My room',
-                          style: TextStyle(
-                            color: Colors.amber,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          entry.username,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    entry.roomTitle != null && entry.roomTitle!.isNotEmpty
-                        ? entry.roomTitle!
-                        : 'Tap to open your room',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Iconsax.arrow_right_3, color: Colors.white70, size: 22),
-          ],
-        ),
-      ),
+    return PartyRefFilterChips<PartyFeedFilter>(
+      values: PartyFeedFilter.values,
+      selected: _filter,
+      labelOf: (f) => labels[f]!,
+      onSelect: (f) => setState(() => _filter = f),
     );
   }
 }

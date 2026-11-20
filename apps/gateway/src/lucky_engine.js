@@ -34,7 +34,7 @@ function randomRatio(min, max) {
 }
 const LADDER = [
   1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 66, 80, 100, 120, 150, 166, 200, 250,
-  300, 400, 500,
+  300, 400, 500, 1000,
 ];
 const SMALL_MAX_MULT = 15;
 const MID_MAX_MULT = 50;
@@ -108,8 +108,8 @@ async function refreshConfig(force = false) {
   }
   try {
     const [lucky, pro] = await Promise.all([
-      db.query(`SELECT * FROM lucky_gift_config WHERE id = 1`),
-      db.query(`SELECT * FROM lucky_pro_gift_config WHERE id = 1`),
+      db.giftQuery(`SELECT * FROM lucky_gift_config WHERE id = 1`),
+      db.giftQuery(`SELECT * FROM lucky_pro_gift_config WHERE id = 1`),
     ]);
     configCache = {
       lucky: lucky.rows[0] || null,
@@ -424,7 +424,7 @@ async function rollBatch(redis, rollReqs) {
 async function creditBonus(result) {
   if (!result?.bonus_won || !result.gift_log_id) return { ok: false };
   try {
-    const { rows: rows } = await db.query(
+    const { rows: rows } = await db.giftQuery(
       `SELECT public.credit_lucky_bonus($1,$2,$3,$4,$5,$6,$7,$8,$9) AS r`,
       [
         result.sender_id,
@@ -469,8 +469,16 @@ async function creditOrEnqueue(redis, result) {
     await enqueuePendingCredit(redis, result);
   }
 }
-function startPendingCreditWorker(redis) {
-  setInterval(async () => {
+function startPendingCreditWorker(redis, hooks = {}) {
+  const track = typeof hooks.track === "function" ? hooks.track : (p) => p;
+  const isStopping =
+    typeof hooks.isStopping === "function" ? hooks.isStopping : () => false;
+  setInterval(() => {
+    if (isStopping()) return;
+    track(pendingCreditRound(redis));
+  }, PENDING_CREDIT_RETRY_MS).unref?.();
+}
+async function pendingCreditRound(redis) {
     try {
       const raw = await redis.rpop(PENDING_CREDIT_KEY);
       if (!raw) return;
@@ -489,7 +497,6 @@ function startPendingCreditWorker(redis) {
     } catch (err) {
       console.warn("[lucky_engine] pending worker:", err.message);
     }
-  }, PENDING_CREDIT_RETRY_MS).unref?.();
 }
 function extractGatewayRolls(payload, actorUserId) {
   if (String(payload.lucky_engine || "") !== "gateway") return [];

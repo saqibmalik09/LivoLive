@@ -19,6 +19,7 @@ class MyProfileHeader extends ConsumerWidget {
     this.countryCode,
     this.age,
     this.onAvatarTap,
+    this.onEditTap,
     this.lightTheme = false,
   });
 
@@ -31,86 +32,115 @@ class MyProfileHeader extends ConsumerWidget {
   final String? countryCode;
   final int? age;
   final VoidCallback? onAvatarTap;
+
+  final VoidCallback? onEditTap;
   final bool lightTheme;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final textColor = lightTheme ? Colors.white : const Color(0xFF1A1A2E);
+    final s = MediaQuery.sizeOf(context).width / 750;
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        GestureDetector(
-          onTap: onAvatarTap,
-          child: Container(
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2.5),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: FastCircleAvatar(
-              radius: 36,
-              imageUrl: avatarUrl,
-              backgroundColor: Colors.white,
-              fallback: Icon(
-                Iconsax.user,
-                color: Colors.grey.shade400,
-                size: 30,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          username,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: textColor,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 8,
-          runSpacing: 6,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (specialIdLevel != null && specialIdLevel! > 0)
-              SpecialIdBadge(id: displayId, level: specialIdLevel, height: 22)
-            else
-              _IdBadge(
-                id: displayId,
-                lightTheme: lightTheme,
-                onCopy: () {
-                  Clipboard.setData(ClipboardData(text: displayId));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('ID copied'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
+            SizedBox(width: 39 * s),
+            GestureDetector(
+              onTap: onAvatarTap,
+              child: FastCircleAvatar(
+                radius: 80 * s,
+                imageUrl: avatarUrl,
+                backgroundColor: Colors.white,
+                fallback: Icon(
+                  Iconsax.user,
+                  color: Colors.grey.shade400,
+                  size: 64 * s,
+                ),
               ),
-            if (gender != null || age != null)
-              _GenderAgeBadge(gender: gender, age: age),
-            if (countryCode != null && countryCode!.isNotEmpty)
-              Text(
-                Country.parse(countryCode!).flagEmoji,
-                style: const TextStyle(fontSize: 18),
+            ),
+            SizedBox(width: 29 * s),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(height: 35 * s),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 38 * s,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF0A0A0A),
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                      if (onEditTap != null) ...[
+                        SizedBox(width: 22 * s),
+                        GestureDetector(
+                          onTap: onEditTap,
+                          behavior: HitTestBehavior.opaque,
+                          child: Icon(
+                            Iconsax.edit,
+                            size: 35 * s,
+                            color: const Color(0xFF818E90),
+                          ),
+                        ),
+                      ],
+                      SizedBox(width: 24 * s),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 16 * s,
+                    runSpacing: 8 * s,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (specialIdLevel != null && specialIdLevel! > 0)
+                        SpecialIdBadge(
+                          id: displayId,
+                          level: specialIdLevel,
+                          height: 22,
+                        )
+                      else
+                        _IdBadge(
+                          id: displayId,
+                          scale: s,
+                          onCopy: () {
+                            Clipboard.setData(ClipboardData(text: displayId));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('ID copied'),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
+                          },
+                        ),
+                      if (gender != null || age != null)
+                        _GenderAgeBadge(gender: gender, age: age),
+                      if (countryCode != null && countryCode!.isNotEmpty)
+                        Text(
+                          Country.parse(countryCode!).flagEmoji,
+                          style: const TextStyle(fontSize: 18),
+                        ),
+                    ],
+                  ),
+                ],
               ),
+            ),
           ],
         ),
         if (userId != null && userId!.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          ProfileTitlesMedalsRow(userId: userId!, compact: true),
+          SizedBox(height: 16 * s),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 39 * s),
+            child: ProfileTitlesMedalsRow(userId: userId!, compact: true),
+          ),
         ],
       ],
     );
@@ -118,47 +148,37 @@ class MyProfileHeader extends ConsumerWidget {
 }
 
 class _IdBadge extends StatelessWidget {
-  const _IdBadge({
-    required this.id,
-    required this.onCopy,
-    this.lightTheme = false,
-  });
+  const _IdBadge({required this.id, required this.onCopy, required this.scale});
 
   final String id;
   final VoidCallback onCopy;
-  final bool lightTheme;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
+    final s = scale;
     return GestureDetector(
       onTap: onCopy,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: lightTheme
-              ? Colors.white.withValues(alpha: 0.22)
-              : const Color(0xFFE8E8EE),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'ID:$id',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: lightTheme ? Colors.white : const Color(0xFF5A5A72),
-              ),
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'ID:$id',
+            style: TextStyle(
+              fontSize: 26 * s,
+              fontWeight: FontWeight.w400,
+              color: const Color(0xFF818E90),
+              height: 1.2,
             ),
-            const SizedBox(width: 4),
-            Icon(
-              Icons.copy_rounded,
-              size: 12,
-              color: lightTheme ? Colors.white : const Color(0xFF5A5A72),
-            ),
-          ],
-        ),
+          ),
+          SizedBox(width: 8 * s),
+          Icon(
+            Icons.copy_rounded,
+            size: 22 * s,
+            color: const Color(0xFF818E90),
+          ),
+        ],
       ),
     );
   }

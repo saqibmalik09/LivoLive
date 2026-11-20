@@ -1,6 +1,10 @@
 const crypto = require("crypto");
 const db = require("./db");
+const gameHealth = require("./game_health");
+const { dbBannerBroadcast: dbBannerBroadcast } = require("./banner_mute");
+const { gameTopBannerMinPayout: gameTopBannerMinPayout } = require("./top_banner_rules");
 let emitGlobalWinRef = null;
+let redisRef = null;
 const SIGN_TTL_SEC = 15;
 const NONCE_TTL_SEC = 15;
 const DEFAULT_CODE_TTL_MS = 5 * 60 * 1e3;
@@ -23,6 +27,12 @@ function config() {
     codeTtlMs: envInt("BAISHUN_CODE_TTL_MS", DEFAULT_CODE_TTL_MS),
     ssTtlMs: envInt("BAISHUN_SS_TTL_MS", DEFAULT_SS_TTL_MS),
     syncAdminToken: String(process.env.BAISHUN_SYNC_ADMIN_TOKEN || "").trim(),
+    catalogAppId: String(
+      process.env.BAISHUN_CATALOG_APP_ID || process.env.BAISHUN_APP_ID || "",
+    ).trim(),
+    catalogAppKey: String(
+      process.env.BAISHUN_CATALOG_APP_KEY || process.env.BAISHUN_APP_KEY || "",
+    ).trim(),
   };
 }
 function uniqueId() {
@@ -99,23 +109,79 @@ async function verifyBaishunRequest(req, redis) {
   }
   return { ok: true, cfg: cfg };
 }
-async function resolveUserByExternalId(userIdExternal) {
+const LOGIN_BUDGET_MS = envInt("BAISHUN_LOGIN_BUDGET_MS", 5e3);
+const LATE_BET_MS = envInt("BAISHUN_LATE_BET_MS", 8e3);
+const CREDIT_BUDGET_MS = envInt("BAISHUN_CREDIT_BUDGET_MS", 12e4);
+function budgetError() {
+  const err = new Error("game request budget exceeded");
+  err.code = "GAME_DB_BUDGET";
+  return err;
+}
+function isBudgetError(err) {
+  return (
+    !!err &&
+    (err.code === "GAME_DB_BUDGET" ||
+      err.code === "GAME_DB_WAIT_TIMEOUT" ||
+      err.code === "57014")
+  );
+}
+async function inGameTx(deadline, fn) {
+  const waitMs = deadline - Date.now();
+  if (waitMs <= 0) throw budgetError();
+  return db.withGameClient(waitMs, async (client) => {
+    const left = deadline - Date.now();
+    if (left <= 0) throw budgetError();
+    await client.query("BEGIN");
+    await client.query(
+      `SET LOCAL statement_timeout = ${Math.max(1, Math.floor(left))}`,
+    );
+    const out = await fn((text, params) => client.query(text, params));
+    await client.query("COMMIT");
+    return out;
+  });
+}
+async function resolveUserByExternalId(userIdExternal, q = db.query) {
   const ext = String(userIdExternal || "").trim();
   if (!ext) return null;
-  const { rows: rows } = await db.query(
+  const { rows: rows } = await q(
     `SELECT id, username, avatar_url, COALESCE(coins, 0)::bigint AS coins, short_id\n     FROM public.users\n     WHERE short_id::text = $1 OR id::text = $1\n     LIMIT 1`,
     [ext],
   );
   return rows[0] || null;
 }
-async function loadValidSession(ssToken) {
+async function loadValidSession(ssToken, q = db.query) {
   const token = String(ssToken || "").trim();
   if (!token) return null;
-  const { rows: rows } = await db.query(
+  const { rows: rows } = await q(
     `SELECT s.ss_token, s.user_id, s.expire_date, s.expires_at,\n            u.username, u.avatar_url, u.short_id,\n            COALESCE(u.coins, 0)::bigint AS coins\n     FROM public.baishun_sessions s\n     JOIN public.users u ON u.id = s.user_id\n     WHERE s.ss_token = $1\n       AND s.expires_at > now()\n     LIMIT 1`,
     [token],
   );
   return rows[0] || null;
+}
+function loginShortIdKey(ssToken) {
+  return `baishun:login_sid:${ssToken}`;
+}
+async function rememberLoginShortId(ssToken, shortId) {
+  if (!redisRef || !ssToken || shortId == null) return;
+  try {
+    const ttlSec = Math.ceil(config().ssTtlMs / 1e3);
+    await redisRef.set(loginShortIdKey(ssToken), String(shortId), "EX", ttlSec);
+  } catch (_) {
+  }
+}
+async function userMatchesSession(body, session) {
+  if (body.user_id == null) return true;
+  const sent = String(body.user_id);
+  if (sent === String(session.short_id) || sent === String(session.user_id)) {
+    return true;
+  }
+  if (!redisRef) return false;
+  try {
+    const atLogin = await redisRef.get(loginShortIdKey(session.ss_token));
+    return atLogin != null && sent === String(atLogin);
+  } catch (_) {
+    return false;
+  }
 }
 function userInfoPayload(userRow) {
   return {
@@ -125,12 +191,12 @@ function userInfoPayload(userRow) {
     balance: Number(userRow.coins || 0),
   };
 }
-async function mintSsToken(userId) {
+async function mintSsToken(userId, q = db.query) {
   const cfg = config();
   const ssToken = crypto.randomBytes(32).toString("hex");
   const expireDate = Date.now() + cfg.ssTtlMs;
   const expiresAt = new Date(expireDate).toISOString();
-  await db.query(
+  await q(
     `INSERT INTO public.baishun_sessions (ss_token, user_id, expire_date, expires_at)\n     VALUES ($1, $2, $3, $4::timestamptz)`,
     [ssToken, userId, expireDate, expiresAt],
   );
@@ -142,43 +208,51 @@ async function handleGetSstoken(body) {
   if (!code || !userExternal) {
     return baishunErr(1003, "code and user_id required");
   }
-  const user = await resolveUserByExternalId(userExternal);
-  if (!user) return baishunErr(1004, "user not found");
-  const { rows: rows } = await db.query(
-    `UPDATE public.baishun_codes\n     SET used_at = now()\n     WHERE code = $1\n       AND user_id = $2\n       AND used_at IS NULL\n       AND expires_at > now()\n     RETURNING code`,
-    [code, user.id],
-  );
-  if (!rows[0]) return baishunErr(1001, "invalid or used code");
-  const token = await mintSsToken(user.id);
-  return baishunOk(token, { user_info: userInfoPayload(user) });
+  return inGameTx(Date.now() + LOGIN_BUDGET_MS, async (q) => {
+    const user = await resolveUserByExternalId(userExternal, q);
+    if (!user) return baishunErr(1004, "user not found");
+    const { rows: rows } = await q(
+      `UPDATE public.baishun_codes\n     SET used_at = now()\n     WHERE code = $1\n       AND user_id = $2\n       AND used_at IS NULL\n       AND expires_at > now()\n     RETURNING code`,
+      [code, user.id],
+    );
+    if (!rows[0]) return baishunErr(1001, "invalid or used code");
+    const token = await mintSsToken(user.id, q);
+    await rememberLoginShortId(token.ss_token, user.short_id);
+    return baishunOk(token, { user_info: userInfoPayload(user) });
+  });
 }
 async function handleGetUserInfo(body) {
-  const session = await loadValidSession(body.ss_token);
-  if (!session) return baishunErr(1005, "invalid ss_token");
-  if (
-    body.user_id != null &&
-    String(body.user_id) !== String(session.short_id) &&
-    String(body.user_id) !== String(session.user_id)
-  ) {
-    return baishunErr(1004, "user mismatch");
-  }
-  return baishunOk(userInfoPayload(session));
+  return inGameTx(Date.now() + LOGIN_BUDGET_MS, async (q) => {
+    const session = await loadValidSession(body.ss_token, q);
+    if (!session) return baishunErr(1005, "invalid ss_token");
+    if (!(await userMatchesSession(body, session))) {
+      return baishunErr(1004, "user mismatch");
+    }
+    return baishunOk(userInfoPayload(session));
+  });
 }
 async function handleUpdateSstoken(body) {
-  const session = await loadValidSession(body.ss_token);
-  if (!session) return baishunErr(1005, "invalid ss_token");
-  if (
-    body.user_id != null &&
-    String(body.user_id) !== String(session.short_id) &&
-    String(body.user_id) !== String(session.user_id)
-  ) {
-    return baishunErr(1004, "user mismatch");
-  }
-  await db.query(`DELETE FROM public.baishun_sessions WHERE ss_token = $1`, [
-    session.ss_token,
-  ]);
-  const token = await mintSsToken(session.user_id);
-  return baishunOk(token);
+  return inGameTx(Date.now() + LOGIN_BUDGET_MS, async (q) => {
+    const session = await loadValidSession(body.ss_token, q);
+    if (!session) return baishunErr(1005, "invalid ss_token");
+    if (!(await userMatchesSession(body, session))) {
+      return baishunErr(1004, "user mismatch");
+    }
+    await q(`DELETE FROM public.baishun_sessions WHERE ss_token = $1`, [
+      session.ss_token,
+    ]);
+    const token = await mintSsToken(session.user_id, q);
+    let loginShortId = session.short_id;
+    if (redisRef) {
+      try {
+        loginShortId =
+          (await redisRef.get(loginShortIdKey(session.ss_token))) ??
+          session.short_id;
+      } catch (_) {}
+    }
+    await rememberLoginShortId(token.ss_token, loginShortId);
+    return baishunOk(token);
+  });
 }
 function pattiMinPayout() {
   const raw = String(
@@ -275,7 +349,7 @@ async function announceBaishunWin({
       : 1;
   const sourceRoomId = parseUuid(roomId);
   const { rows: rows } = await db.query(
-    `INSERT INTO public.global_win_announcements (\n       source_message_id,\n       source_room_id,\n       user_id,\n       username,\n       avatar_url,\n       source_label,\n       game_slug,\n       reward_coins,\n       bonus_multiplier,\n       multiplier_tier,\n       variant,\n       server_broadcast\n     ) VALUES (\n       $1::uuid,\n       $2::uuid,\n       $3::uuid,\n       $4,\n       $5,\n       $6,\n       $7,\n       $8::bigint,\n       $9::int,\n       $10,\n       'game',\n       true\n     )\n     ON CONFLICT (source_message_id) DO NOTHING\n     RETURNING id`,
+    `INSERT INTO public.global_win_announcements (\n       source_message_id,\n       source_room_id,\n       user_id,\n       username,\n       avatar_url,\n       source_label,\n       game_slug,\n       reward_coins,\n       bonus_multiplier,\n       multiplier_tier,\n       variant,\n       server_broadcast\n     ) VALUES (\n       $1::uuid,\n       $2::uuid,\n       $3::uuid,\n       $4,\n       $5,\n       $6,\n       $7,\n       $8::bigint,\n       $9::int,\n       $10,\n       'game',\n       $11::boolean\n     )\n     ON CONFLICT (source_message_id) DO NOTHING\n     RETURNING id`,
     [
       sourceMessageId,
       sourceRoomId,
@@ -287,6 +361,7 @@ async function announceBaishunWin({
       rewardCoins,
       multiplier,
       winTier(multiplier),
+      dbBannerBroadcast() && rewardCoins >= gameTopBannerMinPayout(),
     ],
   );
   if (rows[0]?.id) {
@@ -329,14 +404,59 @@ function scheduleBaishunWinPatti(params) {
     },
   );
 }
+const sessionQueues = new Map();
+function inSessionQueue(key, fn) {
+  const k = String(key || "");
+  if (!k) return fn();
+  const prev = sessionQueues.get(k) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  sessionQueues.set(k, tail);
+  tail.then(() => {
+    if (sessionQueues.get(k) === tail) sessionQueues.delete(k);
+  });
+  return run;
+}
 async function handleChangeBalance(body) {
-  const session = await loadValidSession(body.ss_token);
+  const isBet = Number(body.currency_diff) < 0;
+  const deadline = isBet
+    ? Number(body.timestamp) * 1e3 + LATE_BET_MS
+    : Date.now() + CREDIT_BUDGET_MS;
+  try {
+    const out = await inSessionQueue(body.ss_token, () =>
+      inGameTx(deadline, (q) => applyChangeBalance(body, q)),
+    );
+    if (!out || !out.response) return out;
+    if (out.patti) scheduleBaishunWinPatti(out.patti);
+    return out.response;
+  } catch (err) {
+    if (!isBet || !isBudgetError(err)) throw err;
+    const orderId = String(body.order_id || "").trim();
+    if (orderId) {
+      const { rows: done } = await inGameTx(
+        Date.now() + LOGIN_BUDGET_MS,
+        (q) =>
+          q(
+            `SELECT balance_after FROM public.baishun_orders WHERE order_id = $1`,
+            [orderId],
+          ),
+      );
+      if (done[0]) {
+        return baishunOk({
+          currency_balance: Number(done[0].balance_after ?? 0),
+        });
+      }
+    }
+    return baishunErr(1e3, "bet timed out");
+  }
+}
+async function applyChangeBalance(body, q) {
+  const session = await loadValidSession(body.ss_token, q);
   if (!session) return baishunErr(1005, "invalid ss_token");
-  if (
-    body.user_id != null &&
-    String(body.user_id) !== String(session.short_id) &&
-    String(body.user_id) !== String(session.user_id)
-  ) {
+  if (!(await userMatchesSession(body, session))) {
     return baishunErr(1004, "user mismatch");
   }
   const orderId = String(body.order_id || "").trim();
@@ -344,7 +464,7 @@ async function handleChangeBalance(body) {
   if (!orderId || !Number.isFinite(currencyDiff)) {
     return baishunErr(1003, "order_id and currency_diff required");
   }
-  const { rows: rows } = await db.query(
+  const { rows: rows } = await q(
     `SELECT public.baishun_apply_balance(\n       $1::uuid,\n       $2,\n       $3::bigint,\n       $4,\n       $5::int,\n       $6,\n       $7,\n       $8::jsonb\n     ) AS result`,
     [
       session.user_id,
@@ -375,28 +495,39 @@ async function handleChangeBalance(body) {
     .trim()
     .toLowerCase();
   const payout = Math.trunc(currencyDiff);
-  if (!result.already && payout > 0 && diffMsg === "result") {
-    scheduleBaishunWinPatti({
-      userId: session.user_id,
-      orderId: orderId,
-      payout: payout,
-      gameId: body.game_id != null ? Number(body.game_id) : null,
-      gameRoundId:
-        body.game_round_id != null ? String(body.game_round_id) : null,
-      roomId: body.room_id != null ? String(body.room_id) : null,
-    });
-  }
-  return baishunOk({ currency_balance: Number(result.balance ?? 0) });
+  const patti =
+    !result.already && payout > 0 && diffMsg === "result"
+      ? {
+          userId: session.user_id,
+          orderId: orderId,
+          payout: payout,
+          gameId: body.game_id != null ? Number(body.game_id) : null,
+          gameRoundId:
+            body.game_round_id != null ? String(body.game_round_id) : null,
+          roomId: body.room_id != null ? String(body.room_id) : null,
+        }
+      : null;
+  return {
+    response: baishunOk({ currency_balance: Number(result.balance ?? 0) }),
+    patti: patti,
+  };
 }
 async function mintLaunchCode(userId) {
   const cfg = config();
   const code = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + cfg.codeTtlMs).toISOString();
-  await db.query(
-    `INSERT INTO public.baishun_codes (code, user_id, expires_at)\n     VALUES ($1, $2, $3::timestamptz)`,
-    [code, userId, expiresAt],
-  );
-  return { code: code, expires_at: expiresAt };
+  const shortId = await inGameTx(Date.now() + LOGIN_BUDGET_MS, async (q) => {
+    await q(
+      `INSERT INTO public.baishun_codes (code, user_id, expires_at)\n     VALUES ($1, $2, $3::timestamptz)`,
+      [code, userId, expiresAt],
+    );
+    const { rows } = await q(
+      `SELECT short_id FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return rows[0] && rows[0].short_id != null ? String(rows[0].short_id) : null;
+  });
+  return { code: code, expires_at: expiresAt, short_id: shortId };
 }
 function slugify(name, gameId) {
   const base = String(name || `game${gameId}`)
@@ -408,21 +539,21 @@ function slugify(name, gameId) {
 }
 async function syncGamelistFromBaishun() {
   const cfg = config();
-  if (!cfg.appKey || !cfg.appId) {
+  if (!cfg.catalogAppKey || !cfg.catalogAppId) {
     throw new Error("BAISHUN_APP_ID and BAISHUN_APP_KEY required");
   }
   const listTypes = [2, 3];
   let inserted = 0;
   let updated = 0;
   for (const gameListType of listTypes) {
-    const sign = outboundSign(cfg.appKey);
+    const sign = outboundSign(cfg.catalogAppKey);
     const resp = await fetch(`${cfg.apiBase}/v1/api/gamelist`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         game_list_type: gameListType,
         app_channel: cfg.appChannel,
-        app_id: Number(cfg.appId),
+        app_id: Number(cfg.catalogAppId),
         ...sign,
       }),
     });
@@ -495,46 +626,109 @@ function mount(
   },
 ) {
   emitGlobalWinRef = typeof emitGlobalWin === "function" ? emitGlobalWin : null;
+  redisRef = pubClient || null;
   const cfg = config();
-  function merchantHandler(handler) {
+  function track(endpoint, body, started, payload) {
+    const b = body || {};
+    gameHealth.record(redisRef, {
+      endpoint: endpoint,
+      code: payload ? payload.code : 1000,
+      message: payload ? payload.message : "",
+      ms: Date.now() - started,
+      user: b.user_id,
+      gameId: b.game_id,
+      orderId: b.order_id,
+      isBet: endpoint === "change_balance" && Number(b.currency_diff) < 0,
+      late:
+        endpoint === "change_balance" &&
+        !!payload &&
+        payload.message === "bet timed out",
+    });
+  }
+  function merchantHandler(endpoint, handler) {
     return async (req, res) => {
+      const started = Date.now();
       try {
         const verified = await verifyBaishunRequest(req, pubClient);
         if (!verified.ok) {
-          return res.json(baishunErr(verified.code, verified.message));
+          const refused = baishunErr(verified.code, verified.message);
+          track(endpoint, req.body, started, refused);
+          return res.json(refused);
         }
         const payload = await handler(req.body || {}, verified.cfg);
+        track(endpoint, req.body, started, payload);
         return res.json(payload);
       } catch (err) {
         console.error("[baishun]", err.message);
         const status = err.status || 500;
+        const failed = baishunErr(
+          status === 503 ? 1009 : 1e3,
+          err.message || "internal error",
+        );
+        track(endpoint, req.body, started, failed);
         return res
           .status(status >= 400 && status < 600 ? status : 500)
-          .json(
-            baishunErr(
-              status === 503 ? 1009 : 1e3,
-              err.message || "internal error",
-            ),
-          );
+          .json(failed);
       }
     };
   }
-  app.post("/v1/api/get_sstoken", merchantHandler(handleGetSstoken));
-  app.post("/v1/api/get_user_info", merchantHandler(handleGetUserInfo));
-  app.post("/v1/api/update_sstoken", merchantHandler(handleUpdateSstoken));
-  app.post("/v1/api/change_balance", merchantHandler(handleChangeBalance));
+  app.post(
+    "/v1/api/get_sstoken",
+    merchantHandler("get_sstoken", handleGetSstoken),
+  );
+  app.post(
+    "/v1/api/get_user_info",
+    merchantHandler("get_user_info", handleGetUserInfo),
+  );
+  app.post(
+    "/v1/api/update_sstoken",
+    merchantHandler("update_sstoken", handleUpdateSstoken),
+  );
+  app.post(
+    "/v1/api/change_balance",
+    merchantHandler("change_balance", handleChangeBalance),
+  );
+  app.get("/v1/api/internal/game_health", async (req, res) => {
+    const want = String(process.env.GAME_HEALTH_TOKEN || "");
+    const got = String(req.headers["x-game-health-token"] || "");
+    const okToken =
+      want.length >= 16 &&
+      got.length === want.length &&
+      crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+    if (!okToken || !redisRef) {
+      return res.status(404).json({ ok: false, error: "not found" });
+    }
+    try {
+      const user = String(req.query.user || "").trim() || null;
+      const report = await gameHealth.report(redisRef, {
+        hours: req.query.hours,
+        user: user,
+      });
+      return res.json({ ok: true, ...report });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
   app.post("/v1/api/internal/baishun_mint_code", async (req, res) => {
+    const started = Date.now();
+    let userId = "";
     try {
       const auth = String(req.headers.authorization || "").replace(
         /^Bearer\s+/i,
         "",
       );
       const payload = await verifyToken(auth);
-      const userId = payload?.sub ? String(payload.sub) : "";
+      userId = payload?.sub ? String(payload.sub) : "";
       if (!userId || userId.startsWith("anon:")) {
         return res.status(401).json({ ok: false, error: "unauthorized" });
       }
       const row = await mintLaunchCode(userId);
+      gameHealth.record(redisRef, {
+        endpoint: "mint_code",
+        code: 0,
+        ms: Date.now() - started,
+        user: userId,
+      });
       return res.json({
         ok: true,
         ...row,
@@ -543,6 +737,13 @@ function mount(
       });
     } catch (err) {
       console.error("[baishun] mint_code", err.message);
+      gameHealth.record(redisRef, {
+        endpoint: "mint_code",
+        code: 1000,
+        message: err.message,
+        ms: Date.now() - started,
+        user: userId || null,
+      });
       return res.status(500).json({ ok: false, error: err.message });
     }
   });

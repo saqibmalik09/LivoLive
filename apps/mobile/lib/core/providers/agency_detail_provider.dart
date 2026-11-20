@@ -209,13 +209,15 @@ final agencyProfileProvider = FutureProvider.family<AgencyProfileModel?, String>
 
     var totalExp = 0;
     if (ownerId.isNotEmpty) {
-      final earnings = await supabase
-          .from('earning_logs')
-          .select('agency_amount')
-          .eq('agency_owner_id', ownerId);
-      for (final row in earnings as List) {
-        totalExp += (row['agency_amount'] as num?)?.toInt() ?? 0;
-      }
+      // Summed server-side. Selecting every earning_logs row for the owner and
+      // adding them up here meant a full scan of a 2.4M-row table — 225k rows
+      // for the larger agencies — which hit the statement timeout and failed
+      // the whole provider, so the agency page never rendered.
+      final total = await supabase.rpc(
+        'agency_total_exp',
+        params: <String, dynamic>{'p_owner_id': ownerId},
+      );
+      totalExp = (total as num?)?.toInt() ?? 0;
     }
 
     final ranking = await supabase

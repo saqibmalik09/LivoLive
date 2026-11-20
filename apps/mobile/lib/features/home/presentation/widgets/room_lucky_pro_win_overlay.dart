@@ -183,7 +183,9 @@ class _RoomLuckyProWinOverlayState extends State<RoomLuckyProWinOverlay>
         child: Opacity(
           opacity: _started ? 1 : 0,
           child: Transform.translate(
-            offset: Offset(0, widget.stackOffsetY - size.height * 0.06),
+            // Shifted into the top band: centring put the win banner on the
+            // mic row, hiding the seats underneath it.
+            offset: Offset(0, widget.stackOffsetY - size.height * 0.30),
             child: Center(
               child: FadeTransition(
                 opacity: _fade,

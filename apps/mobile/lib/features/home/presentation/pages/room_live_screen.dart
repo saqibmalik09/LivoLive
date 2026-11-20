@@ -33,6 +33,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:sk_live/features/wallet/presentation/pages/wallet_screen.dart';
 import 'package:sk_live/core/providers/recent_rooms_provider.dart';
 import 'package:sk_live/core/providers/profile_provider.dart';
+import 'package:sk_live/core/providers/seat_wear_cache.dart';
 import 'package:sk_live/core/providers/inventory_provider.dart';
 import 'package:sk_live/core/providers/active_room_provider.dart';
 import 'package:sk_live/core/providers/home_provider.dart';
@@ -49,6 +50,9 @@ import 'package:sk_live/core/services/room_floating_bubble_service.dart';
 import 'package:sk_live/core/util/room_public_id.dart';
 import 'package:sk_live/core/util/tulasi_game.dart';
 import 'package:sk_live/core/util/baishun_game.dart';
+import 'package:sk_live/core/util/wave_game.dart';
+import 'package:sk_live/features/games/presentation/pages/h5_game_webview_page.dart';
+import 'package:sk_live/core/providers/game_overlay_provider.dart';
 import 'package:sk_live/core/util/game_audience_filter.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_games_sheet.dart';
 import 'package:sk_live/core/services/room_voice_session_service.dart';
@@ -91,6 +95,7 @@ import 'package:sk_live/core/providers/team_pk_provider.dart';
 import 'package:sk_live/features/home/presentation/widgets/pk/pk_overlay.dart';
 import 'package:sk_live/features/home/presentation/widgets/pk/pk_setting_sheet.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_members_sheet.dart';
+import 'package:sk_live/features/home/presentation/widgets/room_chat_tabs.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_side_float_rail.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_contribution_sheet.dart';
 import 'package:sk_live/features/home/presentation/pages/gift_center_screen.dart';
@@ -112,6 +117,7 @@ import 'package:sk_live/features/home/services/room_realtime_socket.dart';
 import 'package:sk_live/features/home/services/room_zego_sync_service.dart';
 import 'package:sk_live/features/home/services/room_seat_sync_service.dart';
 import 'package:sk_live/features/home/services/room_win_sync_service.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 part 'room_live_screen_broadcast.dart';
 
@@ -241,6 +247,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         RouteAware,
         _RoomLiveBroadcastMixin {
   static const int _maxChatMessages = 300;
+  static const int _maxGlobalWinMessages = 50;
+  static final RegExp _zegoPrefix = RegExp(r'^zego\b', caseSensitive: false);
   final List<Map<String, dynamic>> _messages = [];
   final Set<String> _messageKeys = <String>{};
 
@@ -395,8 +403,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _notifyChatListChanged();
   }
 
-  bool _isChatFocused = false;
   bool _isRoomChatExpanded = false;
+
+  /// Chat bar open/closed. Notifiers so opening the comment field or the
+  /// games sheet does not setState the whole room (seats, frames, background).
+  final ValueNotifier<bool> _chatBarOpen = ValueNotifier<bool>(false);
+  final ValueNotifier<int> _gamesRev = ValueNotifier<int>(0);
 
   String? _mentionQuery;
   int? _mentionAtIndex;
@@ -808,6 +820,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       TweenSequenceItem(tween: Tween<double>(begin: 1.0, end: 0.0), weight: 29),
     ]).animate(_entranceController!);
 
+    if (AppConstants.useRealtimeGateway) {
+      RoomRealtimeSocket.instance.onSnapshot = (snap) {
+        if (!mounted) return;
+        _applyGatewaySnapshot(snap);
+      };
+    }
+
     _initSeats(
       source: _resumingMinimizedSession ? 'minimize_resume' : 'fresh_entry',
     );
@@ -817,36 +836,33 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     } else {
       unawaited(_clearStaleSeatOnFreshEntry());
     }
-    // Check the ban first: everything below opens voice, subscriptions and chat,
-    // and tearing all of that down mid-flight is what left a black screen.
-    _checkRoomKickBan();
-    _initZego();
-    _setupRoomSubscriptions();
-    if (!AppConstants.useRealtimeGateway) {
-      _startReconcilePoll();
-    }
-    _setupGlobalWinSubscription();
-    _loadChatAndWelcome();
-    _fetchActiveGames();
-    _fetchCurrentUserRole();
-    _startActivityTimer();
-    unawaited(_fetchRoomLevelStats());
-
+    // Paint the room first. Ban check still runs before voice, chat, and
+    // games — just after the cover frame, not before the route can appear.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _checkRoomKickBan();
+      _initZego();
+      _setupRoomSubscriptions();
+      if (!AppConstants.useRealtimeGateway) {
+        _startReconcilePoll();
+      }
+      _setupGlobalWinSubscription();
+      _loadChatAndWelcome();
+      _fetchActiveGames();
+      _fetchCurrentUserRole();
+      _startActivityTimer();
+      unawaited(_fetchRoomLevelStats());
       ref.read(recentRoomsProvider.notifier).addRoom(widget.room);
       unawaited(_promptBubblePermissionOnce());
       unawaited(_ensureRoomShortIdLoaded());
     });
 
     _chatFocusNode.addListener(() {
-      if (mounted) {
-        setState(() {
-          _isChatFocused = _chatFocusNode.hasFocus;
-          if (!_chatFocusNode.hasFocus) {
-            _isRoomChatExpanded = false;
-          }
-        });
-      }
+      if (!mounted) return;
+      final focused = _chatFocusNode.hasFocus;
+      if (!focused) _isRoomChatExpanded = false;
+      final open = focused || _isRoomChatExpanded;
+      if (_chatBarOpen.value != open) _chatBarOpen.value = open;
     });
 
     _messageController.addListener(_onRoomChatTextChanged);
@@ -1328,7 +1344,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         }
       }
     });
-    print('UI_REFRESHING_WITH_COUNT: ${_roomData!['mic_count']}');
+    devLog('UI_REFRESHING_WITH_COUNT: ${_roomData!['mic_count']}');
     if (micCountChanged) {
       _initSeats(source: 'rooms_postgres_update');
     }
@@ -1361,12 +1377,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         _presenceSnapshotBootstrap = false;
       });
 
-      print('[SEAT] gateway joinRoom start room=$roomId');
+      devLog('[SEAT] gateway joinRoom start room=$roomId');
       final joinSw = Stopwatch()..start();
       final joinRes = await socket.joinRoom(roomId: roomId, user: userPayload);
       if (joinRes?['ok'] != true) {
         final err = joinRes?['error']?.toString() ?? 'join_failed';
-        print('[SEAT] gateway joinRoom FAIL: $err');
+        devLog('[SEAT] gateway joinRoom FAIL: $err');
         _gatewayJoinReady = false;
         if (err == 'kicked_from_room' && mounted) {
           _handleKickedFromRoom(
@@ -1376,7 +1392,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         return;
       }
       _gatewayJoinReady = true;
-      print(
+      devLog(
         '[SEAT] gateway joinRoom OK ms=${joinSw.elapsedMilliseconds} '
         'joined=${socket.joinedRoomId}',
       );
@@ -1413,7 +1429,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       unawaited(socket.heartbeat(roomId: roomId, user: userPayload));
     } catch (e) {
       _gatewayJoinReady = false;
-      print('[SEAT] gateway joinRoom FAIL: $e');
+      devLog('[SEAT] gateway joinRoom FAIL: $e');
       final msg = e.toString();
       if (msg.contains('kicked_from_room') && mounted) {
         _handleKickedFromRoom(
@@ -1540,7 +1556,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
     final enteringUsername = user['username']?.toString() ?? 'User';
 
-    _addLocalSystemMessage('$enteringUsername entered the room');
+    _addLocalSystemMessage(
+      '$enteringUsername entered the room',
+      aboutUserId: userId,
+    );
 
     final carSvga =
         payload['car_svga']?.toString() ?? payload['carSvga']?.toString();
@@ -1565,6 +1584,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   void _applyGatewaySnapshot(Map<String, dynamic> snap) {
+    final snapRoom = snap['room_id']?.toString() ?? '';
+    final roomId = widget.room['id']?.toString() ?? '';
+    if (snapRoom.isNotEmpty && roomId.isNotEmpty && snapRoom != roomId) {
+      return;
+    }
     final seatsRaw = snap['seats'];
     if (seatsRaw is List) {
       final occupied = seatsRaw
@@ -1588,7 +1612,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       final prevMy = _mySeatIndex;
       final prevMuted = _isMuted;
       final holdsBefore = _snapshotSeatHolds.length;
-      print(
+      SeatWearCache.ingestSeats(occupied);
+      devLog(
         '[SEAT] snapshot seats=${occupied.length} prevMy=$prevMy '
         'recentClaimWindow=$recentLocalSeat',
       );
@@ -1649,13 +1674,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                 }
                 if (holdOccupant) {
                   _snapshotSeatHolds[holdKey] ??= DateTime.now();
-                  print('[SEAT] snapshot HOLD index=$i user=$localUid');
+                  devLog('[SEAT] snapshot HOLD index=$i user=$localUid');
                 }
                 continue;
               }
               if (localUid != null &&
                   _snapshotSeatHolds.remove(holdKey) != null) {
-                print(
+                devLog(
                   '[SEAT] snapshot CLEAR index=$i user=$localUid (hold expired)',
                 );
               }
@@ -1711,7 +1736,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               recentLocalSeat &&
               prevMy != null &&
               prevMy < _seats.length) {
-            print(
+            devLog(
               '[SEAT] snapshot PRESERVE self during claim window prevMy=$prevMy '
               'occupied=${occupied.length}',
             );
@@ -1733,7 +1758,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                 'is_locked': false,
               };
               muted = _isMuted;
-              print('[SEAT] snapshot restored wiped self occupant at $prevMy');
+              devLog('[SEAT] snapshot restored wiped self occupant at $prevMy');
             }
           }
 
@@ -1774,12 +1799,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           _scheduleSnapshotHoldRecheck();
         }
         if (prevMy != _mySeatIndex) {
-          print(
+          devLog(
             '[SEAT] snapshot mySeat CHANGED $prevMy → $_mySeatIndex '
             '(recentWindow=$recentLocalSeat)',
           );
         } else {
-          print('[SEAT] snapshot mySeat unchanged=$_mySeatIndex');
+          devLog('[SEAT] snapshot mySeat unchanged=$_mySeatIndex');
         }
         _updateAudienceList();
 
@@ -2003,6 +2028,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final exists = _globalWinMessages.any((w) => w['id']?.toString() == winId);
     if (exists) return;
     _globalWinMessages.add({...row, 'type': 'global_win'});
+    // Every lucky win in the whole app lands here (live: ~530 an hour, peaks of
+    // ~1,900). Keep only the newest ones, like the room chat, so a long stay in
+    // a room does not make every chat update slower (S7).
+    while (_globalWinMessages.length > _maxGlobalWinMessages) {
+      _globalWinMessages.removeAt(0);
+    }
     _notifyChatListChanged();
     _scrollToBottom();
   }
@@ -2049,7 +2080,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
       final content = m['content']?.toString() ?? '';
       if (content.toLowerCase().contains('zego error') ||
-          RegExp(r'^zego\b', caseSensitive: false).hasMatch(content)) {
+          _zegoPrefix.hasMatch(content)) {
         return false;
       }
       return true;
@@ -2059,16 +2090,15 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       ..._globalWinMessages,
     ];
 
-    merged.sort((a, b) {
-      final aTime =
-          DateTime.tryParse(a['created_at']?.toString() ?? '') ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      final bTime =
-          DateTime.tryParse(b['created_at']?.toString() ?? '') ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      return aTime.compareTo(bTime);
-    });
-    return merged;
+    // Same order as before (by created_at, unparseable = epoch 0), but each
+    // timestamp is parsed once instead of on every comparison (S7).
+    int timeOf(Map<String, dynamic> m) =>
+        (DateTime.tryParse(m['created_at']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0))
+            .microsecondsSinceEpoch;
+    final keyed = [for (final m in merged) (time: timeOf(m), msg: m)];
+    keyed.sort((a, b) => a.time.compareTo(b.time));
+    return [for (final k in keyed) k.msg];
   }
 
   void _startActivityTimer() {
@@ -2956,9 +2986,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           _withResolvedTulasiIcons(cached),
         );
         if (mounted) {
-          setState(() {
-            _activeGames = visibleCached;
-          });
+          _activeGames = visibleCached;
+          _gamesRev.value++;
         }
       }
 
@@ -3017,15 +3046,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             };
           })
           .toList();
+      try {
+        games.addAll(await fetchWaveRoomGames());
+      } catch (e) {
+        debugPrint('[GAMES] wave catalog failed: $e');
+      }
       debugPrint('[GAMES] fetched active=${games.length}');
       await HiveCacheService.saveGames(games);
       final visible = await filterGamesByAudience(games);
       debugPrint('[GAMES] visible after audience=${visible.length}');
 
       if (mounted) {
-        setState(() {
-          _activeGames = visible;
-        });
+        _activeGames = visible;
+        _gamesRev.value++;
       }
     } catch (e) {
       debugPrint('Error fetching active games: $e');
@@ -3035,9 +3068,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           _withResolvedTulasiIcons(cached),
         );
         if (mounted) {
-          setState(() {
-            _activeGames = visibleCached;
-          });
+          _activeGames = visibleCached;
+          _gamesRev.value++;
         }
       }
     }
@@ -3841,11 +3873,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (source == 'room_meta_broadcast' &&
         _seats.length == micCount &&
         _seats.isNotEmpty) {
-      print('[SEAT] initSeats SKIP same micCount=$micCount ($source)');
+      devLog('[SEAT] initSeats SKIP same micCount=$micCount ($source)');
       return;
     }
 
-    print('INITIALIZING_SEATS_WITH_COUNT: $micCount ($source)');
+    devLog('INITIALIZING_SEATS_WITH_COUNT: $micCount ($source)');
     final previous = _seats
         .map((s) => Map<String, dynamic>.from(s))
         .toList(growable: false);
@@ -3865,11 +3897,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       };
     });
     if (_mySeatIndex != null && _mySeatIndex! >= micCount) {
-      print('[SEAT] initSeats mySeat $_mySeatIndex out of range → null');
+      devLog('[SEAT] initSeats mySeat $_mySeatIndex out of range → null');
       _mySeatIndex = null;
     }
     if (RoomSeatSyncService.shouldSkipFetch(_lastSeatBroadcastAt)) {
-      print('[SEAT] initSeats skip fetchSeats (recent claim window)');
+      devLog('[SEAT] initSeats skip fetchSeats (recent claim window)');
       return;
     }
     _fetchSeats();
@@ -3879,20 +3911,20 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final clearGeneration = _seatSessionGeneration;
     final myId = Supabase.instance.client.auth.currentUser?.id;
     final roomId = widget.room['id'].toString();
-    print(
+    devLog(
       '[SEAT] clearStale start gen=$clearGeneration gateway='
       '${AppConstants.useRealtimeGateway} myId=$myId',
     );
 
     if (AppConstants.useRealtimeGateway) {
       if (!mounted || clearGeneration != _seatSessionGeneration) {
-        print(
+        devLog(
           '[SEAT] clearStale skipped (gen bump) was=$clearGeneration '
           'now=$_seatSessionGeneration',
         );
         return;
       }
-      print('[SEAT] clearStale → requestSnapshot (no Postgres delete)');
+      devLog('[SEAT] clearStale → requestSnapshot (no Postgres delete)');
       unawaited(RoomRealtimeSocket.instance.requestSnapshot(roomId));
       return;
     }
@@ -3904,9 +3936,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             .delete()
             .eq('room_id', roomId)
             .eq('user_id', myId);
-        print('[SEAT] clearStale legacy Postgres delete done');
+        devLog('[SEAT] clearStale legacy Postgres delete done');
       } catch (e) {
-        print('[SEAT] clearStale delete error: $e');
+        devLog('[SEAT] clearStale delete error: $e');
       }
     }
     if (!mounted || clearGeneration != _seatSessionGeneration) return;
@@ -3924,7 +3956,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     while (mounted && DateTime.now().isBefore(deadline)) {
       if (socket.isJoinedTo(roomId)) {
         _gatewayJoinReady = true;
-        print(
+        devLog(
           '[SEAT] gatewayReady OK joined=$roomId '
           'ms=${sw.elapsedMilliseconds}',
         );
@@ -3935,7 +3967,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         if (socket.isConnected && !socket.isJoinedTo(roomId)) {
           final user = ref.read(userProfileProvider).value;
           if (user != null) {
-            print('[SEAT] gatewayReady re-join room=$roomId');
+            devLog('[SEAT] gatewayReady re-join room=$roomId');
             await socket.joinRoom(
               roomId: roomId,
               user: {
@@ -3947,7 +3979,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           }
         }
       } catch (e) {
-        print('[SEAT] gatewayReady ensure/join error: $e');
+        devLog('[SEAT] gatewayReady ensure/join error: $e');
         _gatewayJoinReady = false;
       }
       if (socket.isJoinedTo(roomId)) {
@@ -3958,7 +3990,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
     final ok = mounted && socket.isJoinedTo(roomId);
     _gatewayJoinReady = ok;
-    print(
+    devLog(
       '[SEAT] gatewayReady end ok=$ok flag=$_gatewayJoinReady '
       'joined=${socket.joinedRoomId} connected=${socket.isConnected} '
       'ms=${sw.elapsedMilliseconds}',
@@ -3972,20 +4004,20 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     required Map<String, dynamic> userSnapshot,
     required bool isMuted,
   }) async {
-    print(
+    devLog(
       '[SEAT] claimRetry start seat=$index user=$userId muted=$isMuted '
       'zegoReady=$_zegoLoginReady gatewayFlag=$_gatewayJoinReady '
       'joined=${RoomRealtimeSocket.instance.joinedRoomId}',
     );
     for (var attempt = 0; attempt < 3; attempt++) {
-      print('[SEAT] claimRetry attempt=${attempt + 1}/3');
+      devLog('[SEAT] claimRetry attempt=${attempt + 1}/3');
       final readySw = Stopwatch()..start();
       if (!await _ensureGatewayReady(
         timeout: attempt == 0
             ? const Duration(seconds: 12)
             : const Duration(seconds: 4),
       )) {
-        print('[SEAT] claimRetry gateway not ready → retry wait');
+        devLog('[SEAT] claimRetry gateway not ready → retry wait');
         await Future<void>.delayed(Duration(milliseconds: 200 * (attempt + 1)));
         continue;
       }
@@ -3998,14 +4030,14 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         user: userSnapshot,
         isMuted: isMuted,
       );
-      print(
+      devLog(
         '[SEAT] claimRetry attempt=${attempt + 1} claimed=$claimed '
         'gatewayReady=${readyMs}ms rpc=${rpcSw.elapsedMilliseconds}ms',
       );
       if (claimed) return true;
       await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
     }
-    print('[SEAT] claimRetry FAILED after 3 attempts seat=$index');
+    devLog('[SEAT] claimRetry FAILED after 3 attempts seat=$index');
     return false;
   }
 
@@ -4019,7 +4051,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         timeout: const Duration(milliseconds: 200),
       );
       if (_zegoLoginReady && gatewayOk) {
-        print(
+        devLog(
           '[SEAT] voiceReady OK zego=$_zegoLoginReady gateway=$gatewayOk '
           'ms=${sw.elapsedMilliseconds}',
         );
@@ -4031,7 +4063,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       timeout: const Duration(milliseconds: 200),
     );
     final ok = mounted && _zegoLoginReady && gatewayOk;
-    print(
+    devLog(
       '[SEAT] voiceReady end ok=$ok zego=$_zegoLoginReady gateway=$gatewayOk '
       'ms=${sw.elapsedMilliseconds}',
     );
@@ -4061,7 +4093,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         _mediaResumedFromKeepAlive = false;
       }
     } catch (e) {
-      print('Fetch Room Error: $e');
+      devLog('Fetch Room Error: $e');
     }
   }
 
@@ -4118,28 +4150,30 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     bool refreshGiftTotals = true,
     bool force = false,
   }) async {
-    print(
+    devLog(
       '[SEAT] fetchSeats force=$force skipWindow='
       '${RoomSeatSyncService.shouldSkipFetch(_lastSeatBroadcastAt)} '
       'mySeat=$_mySeatIndex gateway=${AppConstants.useRealtimeGateway}',
     );
     if (!force && RoomSeatSyncService.shouldSkipFetch(_lastSeatBroadcastAt)) {
-      print('[SEAT] fetchSeats SKIP (recent broadcast window)');
+      devLog('[SEAT] fetchSeats SKIP (recent broadcast window)');
       return;
     }
 
     if (AppConstants.useRealtimeGateway && !force) {
-      print('[SEAT] fetchSeats → gateway snapshot (no Postgres wipe)');
-      unawaited(
-        RoomRealtimeSocket.instance.requestSnapshot(
-          widget.room['id'].toString(),
-        ),
-      );
+      devLog('[SEAT] fetchSeats → gateway snapshot (no Postgres wipe)');
+      final roomId = widget.room['id'].toString();
+      unawaited(() async {
+        final snap = await RoomRealtimeSocket.instance.requestSnapshot(roomId);
+        if (!mounted || snap == null || snap['ok'] == false) return;
+        if (snap['seats'] is! List) return;
+        _applyGatewaySnapshot(snap);
+      }());
       return;
     }
 
     final generation = ++_fetchSeatsGeneration;
-    print('[SEAT] fetchSeats Postgres path gen=$generation force=$force');
+    devLog('[SEAT] fetchSeats Postgres path gen=$generation force=$force');
     final supabase = Supabase.instance.client;
     final response = await supabase
         .from('room_seats')
@@ -4149,7 +4183,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (!mounted || generation != _fetchSeatsGeneration) return;
 
     if (refreshGiftTotals && !AppConstants.useRealtimeGateway) {
-      await _refreshSeatGiftTotals();
+      unawaited(_refreshSeatGiftTotals());
     }
 
     if (!mounted || generation != _fetchSeatsGeneration) return;
@@ -4171,6 +4205,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       dbByIndex[idx] = Map<String, dynamic>.from(seatData);
     }
 
+    SeatWearCache.ingestSeats(dbByIndex.values);
     if (mounted) {
       setState(() {
         _mySeatIndex = null;
@@ -4216,7 +4251,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         _updateAudienceList();
       });
 
-      print(
+      devLog(
         '[SEAT] fetchSeats applied prevMy=$previousSeatIndex '
         'nextMy=$_mySeatIndex dbRows=${dbByIndex.length}',
       );
@@ -4229,7 +4264,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         currentSeatedUserIds,
       );
       if (leftSeatUserIds.isNotEmpty) {
-        print('[SEAT] fetchSeats users left seats: $leftSeatUserIds');
+        devLog('[SEAT] fetchSeats users left seats: $leftSeatUserIds');
         _onlineUsers.removeWhere((u) {
           final id = _normalizePresenceUserId(u['id']);
           return id != null && leftSeatUserIds.contains(id);
@@ -4282,7 +4317,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           _localMuteGuardUntil = DateTime.now().add(const Duration(seconds: 8));
         }
         if (seatChanged || muteChanged) {
-          print(
+          devLog(
             '[SEAT] fetchSeats re-publish seatChanged=$seatChanged '
             'muteChanged=$muteChanged',
           );
@@ -4299,7 +4334,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           }
         }
       } else if (previousSeatIndex != null) {
-        print(
+        devLog(
           '[SEAT] fetchSeats WIPED my seat (was $previousSeatIndex) → stopPublish',
         );
         unawaited(_stopSharedAudioIfUploader(reason: 'seat_wiped'));
@@ -4381,7 +4416,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   Future<void> _startSpeaking(bool shouldOpenMic) async {
     if (ref.read(userProfileProvider).value == null) return;
-    print(
+    devLog(
       '[SEAT] startSpeaking openMic=$shouldOpenMic '
       'zegoReady=$_zegoLoginReady mySeat=$_mySeatIndex '
       'publishing=$_isLocalPublishing backend=${_voiceBackend.name}',
@@ -4527,7 +4562,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
     _voiceHealInFlight = true;
     try {
-      print(
+      devLog(
         '[VOICE] heal reason=$reason muted=$_isMuted '
         'publishing=$_isLocalPublishing seat=$_mySeatIndex',
       );
@@ -4560,7 +4595,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
       final selfName =
           ref.read(userProfileProvider).value?['username'] ?? 'User';
-      _addLocalSystemMessage('$selfName entered the room');
+      _addLocalSystemMessage(
+        '$selfName entered the room',
+        aboutUserId: Supabase.instance.client.auth.currentUser?.id,
+      );
     }
   }
 
@@ -4784,7 +4822,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       selection: TextSelection.collapsed(offset: newText.length),
     );
     if (!_isRoomChatExpanded) {
-      setState(() => _isRoomChatExpanded = true);
+      _isRoomChatExpanded = true;
+      _chatBarOpen.value = true;
     }
     _chatFocusNode.requestFocus();
   }
@@ -4805,13 +4844,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (!_pendingMentions.any((m) => m['user_id']?.toString() == userId)) {
       _pendingMentions.add({'user_id': userId, 'username': name});
     }
-    setState(() {
-      _isRoomChatExpanded = true;
-      _messageController.value = TextEditingValue(
-        text: 'Hi @$name',
-        selection: TextSelection.collapsed(offset: 'Hi @$name'.length),
-      );
-    });
+    _messageController.value = TextEditingValue(
+      text: 'Hi @$name',
+      selection: TextSelection.collapsed(offset: 'Hi @$name'.length),
+    );
+    _isRoomChatExpanded = true;
+    _chatBarOpen.value = true;
     unawaited(_sendMessage());
   }
 
@@ -5309,7 +5347,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
 
     if (!broadcastOk) {
-      print(
+      devLog(
         '[MIC] mute broadcast failed — rolling back to muted=$previousMuted',
       );
       if (mounted) {
@@ -5397,12 +5435,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     unawaited(_broadcastChat(eventId: eventId, type: 'system', content: text));
   }
 
-  void _addLocalSystemMessage(String text) {
+  /// [aboutUserId] names the person a notice refers to, so an entry line can
+  /// be tapped to open their profile. System messages carried no user id at
+  /// all, which is why tapping an entry notice did nothing.
+  void _addLocalSystemMessage(String text, {String? aboutUserId}) {
     _tryAppendChatMessage({
       'id': RoomLiveBroadcast.newEventId(),
       'type': 'system',
       'content': text,
       'created_at': DateTime.now().toUtc().toIso8601String(),
+      if (aboutUserId != null && aboutUserId.isNotEmpty)
+        'user_id': aboutUserId,
     });
   }
 
@@ -5662,6 +5705,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         _soundLevelsDisposed = true;
       }
       _chatListVersion.dispose();
+      _chatBarOpen.dispose();
+      _gamesRev.dispose();
       _stopGiftAnimations();
       WidgetsBinding.instance.removeObserver(this);
       _globalWinChannel?.unsubscribe();
@@ -5690,6 +5735,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       _soundLevelsDisposed = true;
     }
     _chatListVersion.dispose();
+    _chatBarOpen.dispose();
+    _gamesRev.dispose();
     _stopGiftAnimations();
     WidgetsBinding.instance.removeObserver(this);
 
@@ -6136,6 +6183,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           controller: _giftFlightController,
           onFullScreenSvga: _showFullScreenGift,
           child: Scaffold(
+            backgroundColor: roomBackdropColor,
             body: Stack(
               children: [
                 Positioned.fill(
@@ -6228,18 +6276,26 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                     child: _buildMentionSuggestions(),
                   ),
 
-                if (!_isChatFocused)
-                  Positioned(
-                    right: 12,
-                    bottom: MediaQuery.of(context).padding.bottom + 68,
-                    child: RoomSideFloatRail(
-                      roomId: widget.room['id'].toString(),
-                      activeGames: _activeGames,
-                      onGameTap: _launchGameFromConfig,
-                    ),
+                Positioned(
+                  right: 12,
+                  bottom: MediaQuery.of(context).padding.bottom + 68,
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([_chatBarOpen, _gamesRev]),
+                    builder: (context, _) {
+                      if (_chatBarOpen.value) return const SizedBox.shrink();
+                      return RoomSideFloatRail(
+                        roomId: widget.room['id'].toString(),
+                        activeGames: _activeGames,
+                        onGameTap: _launchGameFromConfig,
+                      );
+                    },
                   ),
-                if (!_isChatFocused)
-                  RoomSharedAudioFloatingPlayer(
+                ),
+                ListenableBuilder(
+                  listenable: _chatBarOpen,
+                  builder: (context, _) {
+                    if (_chatBarOpen.value) return const SizedBox.shrink();
+                    return RoomSharedAudioFloatingPlayer(
                     sync: _sharedAudioSync,
                     queue: _sharedAudioQueue,
                     bottomInset: 72 + (_repeatGiftSession != null ? 48 : 0),
@@ -6253,13 +6309,22 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                             );
                           }
                         : null,
-                  ),
-                if (!_isChatFocused && _repeatGiftSession != null)
-                  Positioned(
-                    right: 12 + 56 + 10,
-                    bottom: MediaQuery.of(context).padding.bottom + 72,
-                    child: _buildRepeatGiftFloatingButton(),
-                  ),
+                  );
+                  },
+                ),
+                ListenableBuilder(
+                  listenable: _chatBarOpen,
+                  builder: (context, _) {
+                    if (_chatBarOpen.value || _repeatGiftSession == null) {
+                      return const SizedBox.shrink();
+                    }
+                    return Positioned(
+                      right: 12 + 56 + 10,
+                      bottom: MediaQuery.of(context).padding.bottom + 72,
+                      child: _buildRepeatGiftFloatingButton(),
+                    );
+                  },
+                ),
 
                 if (_isEntranceAnimating && _activeCarSvga != null)
                   Positioned.fill(
@@ -6467,7 +6532,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Column(
+                        // The banner is a fixed height, so the name and badges
+                        // have to fit the room left beside the avatar. Without
+                        // a width bound the badge row ran past the banner and
+                        // smeared across the title artwork behind it.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth:
+                                MediaQuery.of(context).size.width -
+                                _entranceProfileLeftInset -
+                                _entranceProfileSize -
+                                28,
+                          ),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -6493,18 +6570,35 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                                 if (badges.isEmpty) {
                                   return const SizedBox.shrink();
                                 }
-                                return Wrap(
-                                  spacing: 4,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: badges.take(4).map((badge) {
-                                    return UserBadgeChip(badge: badge);
-                                  }).toList(),
+                                // One clipped line. A Wrap here spilled onto
+                                // a second row inside a banner that has no
+                                // height for it, which is what put badges on
+                                // top of the user's title.
+                                return SizedBox(
+                                  height: 16,
+                                  child: ClipRect(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        for (final badge in badges.take(4))
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              right: 4,
+                                            ),
+                                            child: UserBadgeChip(badge: badge),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
                                 );
                               },
                               loading: () => const SizedBox(height: 14),
                               error: (_, __) => const SizedBox.shrink(),
                             ),
                           ],
+                        ),
                         ),
                       ],
                     ),
@@ -7742,10 +7836,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final emptyOwnerOuter = 53.0 * seatScale;
     final avatarSize = 42.0 * seatScale;
 
-    // Seat frames are decorative rings drawn around a 42pt avatar. At 58 the
-    // ring sat tight to the avatar and read as small — client asked for larger.
-    // The OverflowBox around this allows up to _kSeatSoundWave (93), so 68
-    // gives a visibly bigger frame with room to spare.
     final frameSize = 68.0 * seatScale;
     final micIcon = 24.0 * seatScale;
     final lockIcon = 14.0 * seatScale;
@@ -7931,27 +8021,15 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                                   return const SizedBox.shrink();
                                 }
 
-                                final bool hasSvga =
-                                    svgaUrl != null && svgaUrl.isNotEmpty;
-
                                 return IgnorePointer(
                                   child: SizedBox(
                                     width: frameSize,
                                     height: frameSize,
-                                    child: hasSvga
-                                        ? RaveSVGAPlayer(
-                                            resUrl: svgaUrl,
-                                            repeat: true,
-                                          )
-                                        : AppNetworkImage(
-                                            imageUrl: imageUrl!,
-                                            fit: BoxFit.contain,
-                                            transformWidth: 180,
-                                            transformHeight: 180,
-                                            errorWidget:
-                                                (context, url, error) =>
-                                                    const SizedBox.shrink(),
-                                          ),
+                                    child: DeferredSeatFrame(
+                                      imageUrl: imageUrl?.toString(),
+                                      svgaUrl: svgaUrl?.toString(),
+                                      memCacheWidth: 180,
+                                    ),
                                   ),
                                 );
                               },
@@ -7983,7 +8061,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         Text(
           user != null
               ? user['username']
-              : (seat['is_locked'] == true ? 'Locked' : 'Seat ${index + 1}'),
+              : (seat['is_locked'] == true ? 'Locked' : 'No.${index + 1}'),
           style: TextStyle(
             color: user != null
                 ? Colors.white
@@ -8385,7 +8463,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final user = ref.read(userProfileProvider).value;
     if (user == null) return;
     final sitSw = Stopwatch()..start();
-    print(
+    devLog(
       '[SEAT] sitDown TAP seat=$index mySeat=$_mySeatIndex '
       'zegoReady=$_zegoLoginReady gatewayFlag=$_gatewayJoinReady '
       'joined=${RoomRealtimeSocket.instance.joinedRoomId} '
@@ -8393,7 +8471,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
 
     if (_seats[index]['is_locked'] == true && !_canSitOnLockedSeat) {
-      print('[SEAT] sitDown blocked — seat locked');
+      devLog('[SEAT] sitDown blocked — seat locked');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -8427,7 +8505,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
 
     if (openMic == null) {
-      print('[SEAT] sitDown cancelled (dialog dismissed)');
+      devLog('[SEAT] sitDown cancelled (dialog dismissed)');
       return;
     }
 
@@ -8435,7 +8513,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (wantOpenMic) {
       final status = await Permission.microphone.request();
       if (!status.isGranted) {
-        print('[SEAT] sitDown mic permission denied — force muted seat');
+        devLog('[SEAT] sitDown mic permission denied — force muted seat');
         wantOpenMic = false;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -8447,7 +8525,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
     }
 
-    print(
+    devLog(
       '[SEAT] sitDown confirmed openMic=$wantOpenMic '
       'ms=${sitSw.elapsedMilliseconds}',
     );
@@ -8492,7 +8570,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     RoomSeatSyncService.invalidateSeatRelease(roomId.toString(), userId);
     RoomSeatSyncService.clearVacated(_recentlyVacatedSeatUsers, userId);
     _lastSeatBroadcastAt = DateTime.now();
-    print(
+    devLog(
       '[SEAT] sitDown optimistic applied seat=$index '
       'prevSeat=$previousSeatIndex ms=${sitSw.elapsedMilliseconds}',
     );
@@ -8515,7 +8593,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       claimSucceeded = true;
       _seatSessionGeneration++;
       _lastSeatBroadcastAt = DateTime.now();
-      print(
+      devLog(
         '[SEAT] sitDown CLAIM OK seat=$index gen=$_seatSessionGeneration '
         'ms=${sitSw.elapsedMilliseconds}',
       );
@@ -8560,19 +8638,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         }
       }
 
-      print('[SEAT] sitDown scheduling startSpeaking');
+      devLog('[SEAT] sitDown scheduling startSpeaking');
       unawaited(_startSpeaking(wantOpenMic));
-      print(
+      devLog(
         '[SEAT] sitDown DONE ok seat=$index ms=${sitSw.elapsedMilliseconds}',
       );
     } catch (e, st) {
-      print('[SEAT] sitDown ERROR claimSucceeded=$claimSucceeded err=$e');
+      devLog('[SEAT] sitDown ERROR claimSucceeded=$claimSucceeded err=$e');
       debugPrint('$st');
       if (claimSucceeded) {
-        print('[SEAT] sitDown keep seat after post-claim error');
+        devLog('[SEAT] sitDown keep seat after post-claim error');
         return;
       }
-      print('[SEAT] sitDown rollback → force fetchSeats');
+      devLog('[SEAT] sitDown rollback → force fetchSeats');
       await _fetchSeats(force: true);
       if (mounted) {
         final msg = _seatClaimErrorMessage(e);
@@ -8908,52 +8986,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   Widget _buildChatTabs() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Row(
-        children: [
-          _buildTabItem(
-            context.l10n.room_chat,
-            _activeTab == 'chat',
-            () => _setActiveChatTab('chat'),
-          ),
-          const SizedBox(width: 16),
-          _buildTabItem(
-            'World',
-            _activeTab == 'all',
-            () => _setActiveChatTab('all'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTabItem(String title, bool isSelected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              color: isSelected ? Colors.yellowAccent : Colors.white38,
-              fontSize: 14,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-          if (isSelected)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              width: 20,
-              height: 2,
-              decoration: BoxDecoration(
-                color: Colors.yellowAccent,
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
-        ],
-      ),
+    return RoomChatTabs(
+      activeTab: _activeTab,
+      onTabSelected: _setActiveChatTab,
     );
   }
 
@@ -9533,6 +9568,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (giftIcon.isEmpty && !(isFullScreen && svgaUrl.isNotEmpty)) return;
 
     _bumpBonusPattiCombo(senderId: senderId, qty: quantity);
+
+    // A game sheet covers the room: no new gift flights behind it (S6).
+    if (ref.read(gameOverlayOpenProvider) > 0) return;
 
     _giftFlightController.enqueue(
       GiftFlightRequest(
@@ -10285,6 +10323,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   void _showFullScreenGift(String svgaUrl) {
     if (_fullScreenGiftShowing) return;
+    // This overlay plays on top of everything, including an open game sheet;
+    // skip it while a game is open so the game keeps the CPU / GPU (S6).
+    if (ref.read(gameOverlayOpenProvider) > 0) return;
     _fullScreenGiftShowing = true;
     debugPrint('Showing full screen gift: $svgaUrl');
     late OverlayEntry entry;
@@ -10363,16 +10404,26 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       );
     }
 
-    final filteredMessages = _activeTab == 'all'
-        ? _buildAllTabMessages()
-        : _messages
-              .where(
-                (m) =>
-                    m['type'] == 'chat' ||
-                    m['type'] == 'image' ||
-                    _isRoomEntryNotice(m),
-              )
-              .toList();
+    final List<Map<String, dynamic>> filteredMessages;
+    switch (_activeTab) {
+      case 'all':
+        filteredMessages = _buildAllTabMessages();
+        break;
+      case 'gift':
+        filteredMessages = _messages
+            .where((m) => m['type'] == 'gift')
+            .toList();
+        break;
+      default:
+        filteredMessages = _messages
+            .where(
+              (m) =>
+                  m['type'] == 'chat' ||
+                  m['type'] == 'image' ||
+                  _isRoomEntryNotice(m),
+            )
+            .toList();
+    }
 
     return Container(
       height: 250,
@@ -10391,9 +10442,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             final isEntryNotice = _isRoomEntryNotice(msg);
             final isWelcome = isEntryNotice && !content.contains('Warning!');
             final isSkLiveWelcome = content.contains('Welcome to Livo');
+            // An entry notice names whoever just walked in, so tapping it
+            // should open that person — previously the name was inert and
+            // there was no way to reach their profile from the notice.
+            final entryUserId = msg['user_id']?.toString() ?? '';
             return Align(
               alignment: Alignment.centerLeft,
-              child: Container(
+              child: GestureDetector(
+                onTap: isEntryNotice && entryUserId.isNotEmpty
+                    ? () => _showUserMiniProfile(entryUserId)
+                    : null,
+                child: Container(
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -10415,6 +10474,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                     fontWeight: isWelcome ? FontWeight.w800 : FontWeight.bold,
                     height: 1.25,
                   ),
+                ),
                 ),
               ),
             );
@@ -10778,9 +10838,21 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   Widget _buildBottomToolbar() {
-    final showExpandedChat = _isRoomChatExpanded || _isChatFocused;
     final unreadDmCount = friendMessagesUnreadCount(ref);
 
+    return ValueListenableBuilder<bool>(
+      valueListenable: _chatBarOpen,
+      builder: (context, chatOpen, _) => _bottomToolbarBody(
+        showExpandedChat: chatOpen,
+        unreadDmCount: unreadDmCount,
+      ),
+    );
+  }
+
+  Widget _bottomToolbarBody({
+    required bool showExpandedChat,
+    required int unreadDmCount,
+  }) {
     return Container(
       key: _bottomToolbarKey,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -10858,7 +10930,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       );
       return;
     }
-    setState(() => _isRoomChatExpanded = true);
+    _isRoomChatExpanded = true;
+    _chatBarOpen.value = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _chatFocusNode.requestFocus();
     });
@@ -10866,10 +10939,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   void _collapseRoomChat() {
     _chatFocusNode.unfocus();
-    setState(() {
-      _isRoomChatExpanded = false;
-      _isChatFocused = false;
-    });
+    _isRoomChatExpanded = false;
+    _chatBarOpen.value = false;
   }
 
   Widget _buildExpandedRoomChatBar() {
@@ -10906,7 +10977,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               autofocus: true,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: const InputDecoration(
-                hintText: 'Say something...',
+                hintText: 'Say Hi',
                 hintStyle: TextStyle(color: Colors.white60, fontSize: 13),
                 border: InputBorder.none,
               ),
@@ -11763,11 +11834,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<void> _submitReport(String reason) async {
     final user = ref.read(userProfileProvider).value;
     if (user == null) {
-      print('REPORT_DEBUG: User is null');
+      devLog('REPORT_DEBUG: User is null');
       return;
     }
 
-    print('REPORT_DEBUG: Submitting report for reason: $reason');
+    devLog('REPORT_DEBUG: Submitting report for reason: $reason');
 
     try {
       final messenger = ScaffoldMessenger.of(context);
@@ -11791,7 +11862,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         ),
       );
     } catch (e) {
-      print('REPORT_ERROR: $e');
+      devLog('REPORT_ERROR: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -11961,7 +12032,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   Future<void> _updateRoomMode(int micCount, String mode) async {
-    print('ATTEMPTING_ROOM_UPDATE: micCount=$micCount, mode=$mode');
+    devLog('ATTEMPTING_ROOM_UPDATE: micCount=$micCount, mode=$mode');
     try {
       final roomId = _roomData?['id'] ?? widget.room['id'];
       final response = await Supabase.instance.client
@@ -11970,7 +12041,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           .eq('id', roomId)
           .select();
 
-      print('SUPABASE_RESPONSE: $response');
+      devLog('SUPABASE_RESPONSE: $response');
 
       if (response.isEmpty) {
         _addSystemMessage('Update failed: No rows affected. Check columns.');
@@ -11992,7 +12063,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (mounted) Navigator.pop(context);
     } catch (e) {
       _addSystemMessage('Error updating room: $e');
-      print('Room Update Error: $e');
+      devLog('Room Update Error: $e');
     }
   }
 
@@ -12308,6 +12379,21 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
     final baseUrl = (game['game_url'] ?? 'https://sk-live-games.vercel.app/')
         .toString();
+    if (isWaveGameConfig(game) || isWaveGameUrl(baseUrl)) {
+      final rawPct = game['webview_height_percent'];
+      final pct = rawPct is num
+          ? rawPct.toDouble()
+          : double.tryParse(rawPct?.toString() ?? '');
+      launchH5Game(
+        context,
+        name: (game['display_name'] ?? game['name'] ?? 'Game').toString(),
+        gameUrl: baseUrl,
+        gameConfig: game,
+        heightPercent: pct,
+        roomId: widget.room['id']?.toString(),
+      );
+      return;
+    }
     final tulasi = isTulasiGameConfig(game) || isTulasiGameUrl(baseUrl);
     final baishun =
         !tulasi &&
@@ -12362,21 +12448,29 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   Future<void> _showGamesMenu() async {
-    await _fetchActiveGames();
     if (!mounted) return;
-    final recent = HiveCacheService.resolveRecentGames(_activeGames);
-    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+    // The sheet is inserted before any Hive read or catalog request. A fetch
+    // started in this same turn runs its synchronous prefix first and is
+    // what made the icon feel dead for a second.
+    final selectedFuture = showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (sheetContext) => RoomGamesSheet(
-        games: _activeGames,
-        recentGames: recent,
-        onGameTap: (game) {
-          Navigator.pop(sheetContext, game);
-        },
+      builder: (sheetContext) => ValueListenableBuilder<int>(
+        valueListenable: _gamesRev,
+        builder: (context, _, _) => RoomGamesSheet(
+          games: _activeGames,
+          recentGames: HiveCacheService.resolveRecentGames(_activeGames),
+          onGameTap: (game) {
+            Navigator.pop(sheetContext, game);
+          },
+        ),
       ),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_fetchActiveGames());
+    });
+    final selected = await selectedFuture;
     if (!mounted || selected == null) return;
     _launchGameFromConfig(selected);
   }
@@ -12404,6 +12498,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             .clamp(35.0, 95.0);
     final launchUri = Uri.tryParse(url);
     final roomId = widget.room['id']?.toString() ?? kBaishunShowroomRoomId;
+    if (baishun) {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => H5GameWebViewSheet(
+          url: url,
+          baishun: true,
+          landscape: landscape,
+          heightPercent: pct,
+          roomId: roomId,
+          gameMode: '3',
+          supportZoom: false,
+        ),
+      );
+      return;
+    }
     InAppWebViewController? baishunController;
 
     showModalBottomSheet(

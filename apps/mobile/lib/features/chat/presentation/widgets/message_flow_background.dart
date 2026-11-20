@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:sk_live/core/theme/app_colors.dart';
-import 'package:sk_live/features/home/presentation/widgets/party_screen_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_background.dart';
 
 class MessageFlowBackground extends StatelessWidget {
   const MessageFlowBackground({super.key});
 
-  static const Color fallbackColor = AppColors.partyPageBg;
+  static const Color fallbackColor = HomeRefBackground.pageMint;
 
   @override
   Widget build(BuildContext context) {
-    return const PartyScreenBackground();
+    return const ColoredBox(color: fallbackColor);
   }
 }
 

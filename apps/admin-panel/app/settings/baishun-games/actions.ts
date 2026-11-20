@@ -19,6 +19,8 @@ export type BaishunGameRow = {
   is_landscape: boolean;
   category_id: string | null;
   preview_url: string;
+  test_game_url: string | null;
+  test_user_ids: string[];
 };
 function asConfig(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -62,8 +64,42 @@ function mapGame(row: Record<string, unknown>): BaishunGameRow {
     is_landscape: truthy(cfg.isLandscape) || truthy(cfg.is_landscape),
     category_id: row.category_id ? String(row.category_id) : null,
     preview_url: String(cfg.preview_url ?? ""),
+    test_game_url: row.test_game_url ? String(row.test_game_url) : null,
+    test_user_ids: Array.isArray(row.test_user_ids)
+      ? (row.test_user_ids as unknown[]).map(String)
+      : [],
   };
 }
+/**
+ * Point a game at a candidate URL for named testers only.
+ *
+ * Everyone not listed keeps loading game_url, so a bad URL can only ever affect
+ * the people testing it. Clearing the URL, or removing every tester, switches
+ * the override off.
+ */
+export async function setGameTestUrl(input: {
+  id: string;
+  test_game_url: string | null;
+  test_user_ids: string[];
+}) {
+  try {
+    const url = (input.test_game_url ?? "").trim();
+    if (url && !/^https?:\/\//i.test(url)) {
+      return { success: false as const, error: "Test URL must start with http:// or https://" };
+    }
+    const ids = Array.from(new Set((input.test_user_ids ?? []).map((u) => String(u).trim()).filter(Boolean)));
+    const { error } = await supabaseAdmin
+      .from("game_configs")
+      .update({ test_game_url: url || null, test_user_ids: ids })
+      .eq("id", input.id);
+    if (error) return { success: false as const, error: error.message };
+    revalidateBaishun();
+    return { success: true as const, testers: ids.length, active: Boolean(url && ids.length) };
+  } catch (error: any) {
+    return { success: false as const, error: error.message as string };
+  }
+}
+
 function revalidateBaishun() {
   revalidatePath("/settings/baishun-games");
   revalidatePath("/settings/game-control");
@@ -510,6 +546,8 @@ export async function syncBaishunGamelist(opts?: { forceRehostIcons?: boolean })
               is_landscape: orientation === 2,
               category_id: null,
               preview_url: previewUrl,
+              test_game_url: null,
+              test_user_ids: [],
             });
           }
         }

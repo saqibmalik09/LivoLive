@@ -14,8 +14,21 @@ void sortRoomsByPopularRanking(List<Map<String, dynamic>> rooms) {
 
     final aScore = (a['ranking_score'] as num?)?.toInt() ?? 0;
     final bScore = (b['ranking_score'] as num?)?.toInt() ?? 0;
-    return bScore.compareTo(aScore);
+    if (aScore != bScore) {
+      return bScore.compareTo(aScore);
+    }
+
+    // Must match the query's final keys, or this re-sort reshuffles each page
+    // against the server's order and rooms jump as more pages load.
+    final byCreated = _createdAt(b).compareTo(_createdAt(a));
+    if (byCreated != 0) return byCreated;
+    return (a['id']?.toString() ?? '').compareTo(b['id']?.toString() ?? '');
   });
+}
+
+DateTime _createdAt(Map<String, dynamic> room) {
+  return DateTime.tryParse(room['created_at']?.toString() ?? '') ??
+      DateTime.fromMillisecondsSinceEpoch(0);
 }
 
 int _seatedCount(Map<String, dynamic> room) {

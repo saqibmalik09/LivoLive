@@ -10,6 +10,7 @@ import 'package:sk_live/core/router/app_router.dart';
 import 'package:sk_live/core/router/navigation_utils.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/core/widgets/profile_cover_carousel.dart';
+import 'package:sk_live/features/home/presentation/widgets/party_ref_widgets.dart';
 
 class PartyProfileCard extends ConsumerWidget {
   const PartyProfileCard({super.key, required this.entry});
@@ -48,122 +49,160 @@ class PartyProfileCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final covers = entry.coverImages;
     final bio = entry.bio;
+    final s = PartyRefLayout.scaleOf(context);
+    final avatar = entry.avatarUrl ?? '';
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: EdgeInsets.only(bottom: 33 * s),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GestureDetector(
-                onTap: () => _openProfile(context, ref),
-                child: CircleAvatar(
-                  radius: 26,
-                  backgroundColor: AppColors.primaryUltraLight,
-                  backgroundImage:
-                      entry.avatarUrl != null && entry.avatarUrl!.isNotEmpty
-                      ? CachedNetworkImageProvider(entry.avatarUrl!)
-                      : null,
-                  child: entry.avatarUrl == null || entry.avatarUrl!.isEmpty
-                      ? const Icon(Iconsax.user, color: AppColors.primary)
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    GestureDetector(
-                      onTap: () => _openProfile(context, ref),
-                      behavior: HitTestBehavior.opaque,
-                      child: Text(
-                        entry.username,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+          SizedBox(
+            height: 90 * s,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(width: 28 * s),
+                GestureDetector(
+                  onTap: () => _openProfile(context, ref),
+                  child: ClipOval(
+                    child: SizedBox.square(
+                      dimension: 90 * s,
+                      child: avatar.isNotEmpty
+                          ? CachedNetworkImage(
+                              imageUrl: avatar,
+                              fit: BoxFit.cover,
+                              memCacheWidth: 200,
+                              placeholder: (_, _) => const ColoredBox(
+                                color: AppColors.primaryUltraLight,
+                              ),
+                              errorWidget: (_, _, _) => const ColoredBox(
+                                color: AppColors.primaryUltraLight,
+                                child: Icon(
+                                  Iconsax.user,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            )
+                          : const ColoredBox(
+                              color: AppColors.primaryUltraLight,
+                              child: Icon(
+                                Iconsax.user,
+                                color: AppColors.primary,
+                              ),
+                            ),
                     ),
-                    if (entry.roomTitle != null &&
-                        entry.roomTitle!.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Room: ${entry.roomTitle}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textHint,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                    if (bio.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                  ),
+                ),
+                SizedBox(width: 12 * s),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(height: 12.5 * s),
                       GestureDetector(
                         onTap: () => _openProfile(context, ref),
                         behavior: HitTestBehavior.opaque,
                         child: Text(
-                          bio,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: AppColors.textSecondary,
-                            height: 1.35,
+                          entry.username,
+                          style: TextStyle(
+                            fontSize: 30 * s,
+                            fontWeight: FontWeight.w400,
+                            color: const Color(0xFF0B1210),
+                            height: 1.2,
                           ),
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      if (entry.roomTitle != null &&
+                          entry.roomTitle!.isNotEmpty) ...[
+                        SizedBox(height: 5.5 * s),
+                        Text(
+                          'Room: ${entry.roomTitle}',
+                          style: TextStyle(
+                            fontSize: 24 * s,
+                            color: const Color(0xFF8E9A97),
+                            height: 1.2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              GestureDetector(
-                onTap: () => _openChat(context),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.accent.withValues(alpha: 0.35),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
+                SizedBox(width: 12 * s),
+                Padding(
+                  padding: EdgeInsets.only(top: 2.5 * s),
+                  child: GestureDetector(
+                    onTap: () => _openChat(context),
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
                       ),
-                    ],
-                  ),
-                  child: const Text(
-                    'Hi',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      decoration: BoxDecoration(
+                        color: AppColors.accent,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.accent.withValues(alpha: 0.35),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Text(
+                        'Hi',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+                SizedBox(width: 34 * s),
+              ],
+            ),
           ),
           if (covers.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ProfileCoverCarousel(
-              imageUrls: covers,
-              width: 80,
-              height: 80,
-              borderRadius: BorderRadius.circular(10),
-              dotsOverlay: true,
-              memCacheWidth: 240,
-              onTap: () => _openProfile(context, ref),
+            SizedBox(height: 18 * s),
+            Padding(
+              padding: EdgeInsetsDirectional.only(start: 34 * s),
+              child: ProfileCoverCarousel(
+                imageUrls: covers,
+                width: 333 * s,
+                height: 375 * s,
+                borderRadius: BorderRadius.circular(16 * s),
+                dotsOverlay: true,
+                memCacheWidth: 720,
+                onTap: () => _openProfile(context, ref),
+              ),
+            ),
+          ],
+          if (bio.isNotEmpty) ...[
+            SizedBox(height: 14 * s),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 34 * s),
+              child: GestureDetector(
+                onTap: () => _openProfile(context, ref),
+                behavior: HitTestBehavior.opaque,
+                child: Text(
+                  bio,
+                  style: TextStyle(
+                    fontSize: 30 * s,
+                    fontWeight: FontWeight.w400,
+                    color: const Color(0xFF061C17),
+                    height: 1.35,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           ],
         ],

@@ -1,3 +1,9 @@
+/*
+ * Livo / SK Live Party
+ * App maintenance & design by NoxLab AI - https://noxlabai.com
+ * Contact: https://noxlabai.com/quote | https://noxlabai.com/book
+ * (c) 2026 NoxLab AI - maintenance and design updates
+ */
 require("dotenv").config();
 const http = require("http");
 const fs = require("fs");
@@ -19,8 +25,18 @@ const dmState = require("./dm_state");
 const gameState = require("./game_state");
 const orbitVoice = require("./orbit_voice");
 const baishunMerchant = require("./baishun_merchant");
+const waveGames = require("./wave_games");
+const mediaUpload = require("./media_upload");
 const luckyEngine = require("./lucky_engine");
 const giftSettle = require("./gift_settle");
+const { createKeyedQueue: createKeyedQueue } = require("./keyed_queue");
+const { bannerTarget: bannerTarget } = require("./banner_mute");
+const { topBannerAllowed: topBannerAllowed } = require("./top_banner_rules");
+const { applyKeepAlive: applyKeepAlive } = require("./http_tuning");
+const { installGracefulShutdown: installGracefulShutdown } = require("./graceful_shutdown");
+const giftSendQueue = createKeyedQueue({
+  maxPending: Number(process.env.GIFT_SEND_MAX_PENDING) || 50,
+});
 const PORT = Number(process.env.PORT || 3e3);
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -82,6 +98,8 @@ app.get("/health", async (_req, res) => {
   });
 });
 const server = http.createServer(app);
+applyKeepAlive(server);
+const shutdown = installGracefulShutdown({ server: server });
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
   transports: ["websocket", "polling"],
@@ -301,7 +319,8 @@ function emitGlobalWin(winPayload, actorUserId) {
     ts: Date.now(),
     data: data,
   };
-  io.emit("global:win", envelope);
+  if (!topBannerAllowed(data)) return envelope;
+  bannerTarget(io).emit("global:win", envelope);
   return envelope;
 }
 function pickGiftMessageForLog(data, giftLogId) {
@@ -382,6 +401,8 @@ baishunMerchant.mount(app, {
   verifyToken: verifyToken,
   emitGlobalWin: emitGlobalWin,
 });
+waveGames.mount(app, { verifyToken: verifyToken });
+mediaUpload.mount(app, { verifyToken: verifyToken });
 const BIG_GIFT_PATTI_THRESHOLD = 5e5;
 function emitGlobalBigGift(giftPayload, actorUserId) {
   const data = { ...giftPayload };
@@ -394,7 +415,7 @@ function emitGlobalBigGift(giftPayload, actorUserId) {
     ts: Date.now(),
     data: data,
   };
-  io.emit("global:big_gift", envelope);
+  bannerTarget(io).emit("global:big_gift", envelope);
   return envelope;
 }
 function extractBigGiftPattiFromGiftMessage(message, actorUserId, roomId) {
@@ -503,25 +524,69 @@ async function redisSeatIndexForUser(roomId, userId) {
   } catch (_) {}
   return null;
 }
-async function buildSnapshot(roomId) {
-  let seats = await state.getSeatsSnapshot(pubClient, roomId);
-  if (!seats) seats = await refreshSeatsCache(roomId);
-  let meta = await state.getMetaSnapshot(pubClient, roomId);
-  if (!meta) {
+function bumpSeatEmit(socket) {
+  socket.data.seatEmitGen = (socket.data.seatEmitGen || 0) + 1;
+  return socket.data.seatEmitGen;
+}
+function emitCachedSeats(socket, roomId) {
+  const gen = bumpSeatEmit(socket);
+  void (async () => {
     try {
-      meta = await db.loadRoomMeta(roomId);
-      await state.setMetaSnapshot(pubClient, roomId, meta);
-    } catch (_) {}
+      const seats = await state.getSeatsSnapshot(pubClient, roomId);
+      if (!Array.isArray(seats) || seats.length === 0) return;
+      if (!socket.connected || socket.data.seatEmitGen !== gen) return;
+      socket.emit("room:snapshot", { room_id: roomId, seats: seats });
+    } catch (err) {
+      console.warn("[room:join] early seats:", err.message);
+    }
+  })();
+}
+async function buildSnapshot(roomId) {
+  const [
+    cachedSeats,
+    cachedMeta,
+    presence,
+    seqRaw,
+    seatGiftTotals,
+    cachedYoutube,
+    cachedAudio,
+  ] = await Promise.all([
+    state.getSeatsSnapshot(pubClient, roomId),
+    state.getMetaSnapshot(pubClient, roomId),
+    state.listPresence(pubClient, roomId),
+    pubClient.get(`room:${roomId}:seq`),
+    state.getSeatGiftTotals(pubClient, roomId),
+    state.getYoutubeState(pubClient, roomId),
+    state.getSharedAudioState(pubClient, roomId),
+  ]);
+  let seats = cachedSeats;
+  let meta = cachedMeta;
+  const pending = [];
+  if (!seats) {
+    pending.push(
+      refreshSeatsCache(roomId).then((rows) => {
+        seats = rows;
+      }),
+    );
   }
-  const presence = await state.listPresence(pubClient, roomId);
-  const seq = Number((await pubClient.get(`room:${roomId}:seq`)) || 0);
-  const seatGiftTotals = await state.getSeatGiftTotals(pubClient, roomId);
-  let youtubeState = await state.getYoutubeState(pubClient, roomId);
+  if (!meta) {
+    pending.push(
+      (async () => {
+        try {
+          meta = await db.loadRoomMeta(roomId);
+          await state.setMetaSnapshot(pubClient, roomId, meta);
+        } catch (_) {}
+      })(),
+    );
+  }
+  if (pending.length) await Promise.all(pending);
+  const seq = Number(seqRaw || 0);
+  let youtubeState = cachedYoutube;
   if (!youtubeState && meta?.youtube_state) {
     youtubeState =
       typeof meta.youtube_state === "object" ? meta.youtube_state : null;
   }
-  let sharedAudioState = await state.getSharedAudioState(pubClient, roomId);
+  let sharedAudioState = cachedAudio;
   if (!sharedAudioState && meta?.shared_audio_state) {
     sharedAudioState =
       typeof meta.shared_audio_state === "object"
@@ -1146,6 +1211,53 @@ async function sweepStalePresenceSeats() {
   } while (cursor !== "0");
   if (swept > 0) console.log(`[sweep] done vacated=${swept}`);
 }
+
+const ORPHAN_SEAT_MIN_AGE_MS = Number(
+  process.env.ORPHAN_SEAT_MIN_AGE_MS || 15 * 6e4,
+);
+
+async function sweepOrphanedSeats() {
+  if (!db.getPool()) return;
+  let rows;
+  try {
+    ({ rows: rows } = await db.query(
+      `SELECT room_id, user_id FROM room_seats
+       WHERE user_id IS NOT NULL
+         AND updated_at < now() - make_interval(secs => $1::double precision)
+       ORDER BY updated_at ASC
+       LIMIT 200`,
+      [ORPHAN_SEAT_MIN_AGE_MS / 1000],
+    ));
+  } catch (err) {
+    console.warn("[sweep:orphan] query failed:", err.message);
+    return;
+  }
+  let vacated = 0;
+  for (const row of rows) {
+    const userId = String(row.user_id);
+    const roomId = String(row.room_id);
+    if (!userId || !roomId || userId.startsWith("anon:")) continue;
+    if (pendingGraceVacates.has(userId)) continue;
+    try {
+      if (await userHasLiveSocket(userId)) continue;
+      if (await pubClient.exists(`room:${roomId}:presence:${userId}`)) continue;
+      await vacateUserFromRoom(
+        roomId,
+        userId,
+        { id: userId },
+        "sweep-orphan-seat",
+      );
+      vacated += 1;
+      console.log(`[sweep:orphan] vacated user=${userId} room=${roomId}`);
+    } catch (err) {
+      console.warn("[sweep:orphan] vacate failed:", err.message);
+    }
+  }
+  if (vacated > 0) {
+    console.log(`[sweep:orphan] done vacated=${vacated}`);
+  }
+}
+
 let maintenanceOn = false;
 function hasMaintenanceBypass(socket) {
   if (!MAINTENANCE_BYPASS_TOKEN) return false;
@@ -1378,6 +1490,7 @@ io.on("connection", (socket) => {
         socket.data.userId = claimedId;
       }
       user.id = socket.data.userId;
+      emitCachedSeats(socket, roomId);
       if (prevSocketRoom && prevSocketRoom !== roomId) {
         await vacateUserFromRoom(
           prevSocketRoom,
@@ -1412,6 +1525,7 @@ io.on("connection", (socket) => {
         }
       }
       const snapshot = await buildSnapshot(roomId);
+      bumpSeatEmit(socket);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
       const joinPayload = {
         event_id: payload.event_id || uuidv4(),
@@ -1536,7 +1650,9 @@ io.on("connection", (socket) => {
     try {
       const roomId = String(payload.roomId || socket.data.roomId || "").trim();
       if (!roomId) return ackErr(ack, "roomId required");
+      emitCachedSeats(socket, roomId);
       const snapshot = await buildSnapshot(roomId);
+      bumpSeatEmit(socket);
       ackOk(ack, snapshot);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
     } catch (err) {
@@ -1885,7 +2001,7 @@ io.on("connection", (socket) => {
           );
           if (!win?.bonus_won) continue;
           gatewayWins.push(win);
-          luckyEngine.creditOrEnqueue(pubClient, win).catch((err) => {
+          shutdown.track(luckyEngine.creditOrEnqueue(pubClient, win)).catch((err) => {
             console.warn("[lucky_engine] credit enqueue:", err.message);
           });
           const patchMsg = (msg) => {
@@ -2103,7 +2219,7 @@ io.on("connection", (socket) => {
   socket.on("gift:notify", (payload = {}, ack) => {
     processGiftNotify(socket, payload, ack);
   });
-  socket.on("gift:send", async (payload = {}, ack) => {
+  async function handleGiftSend(payload = {}, ack) {
     try {
       const roomId = String(payload.roomId || payload.room_id || "").trim();
       const giftId = String(payload.gift_id || payload.giftId || "").trim();
@@ -2233,6 +2349,15 @@ io.on("connection", (socket) => {
       console.warn("[gift:send] failed:", err.message);
       ackErr(ack, err.message);
     }
+  }
+  socket.on("gift:send", (payload = {}, ack) => {
+    giftSendQueue
+      .run(socket.data.userId || socket.id, () => handleGiftSend(payload, ack))
+      .catch((err) => {
+        if (err && err.code === "QUEUE_FULL") {
+          ackErr(ack, "Too many gifts at once - please wait a moment");
+        }
+      });
   });
   socket.on("win:notify", async (payload = {}, ack) => {
     try {
@@ -2785,6 +2910,9 @@ setInterval(() => {
   sweepStalePresenceSeats().catch((err) =>
     console.warn("[sweep] error:", err.message),
   );
+  sweepOrphanedSeats().catch((err) =>
+    console.warn("[sweep:orphan] error:", err.message),
+  );
 }, PRESENCE_SWEEP_MS).unref?.();
 if (!localJwks && !SUPABASE_JWT_SECRET && !remoteJwks) {
   console.error(
@@ -2810,6 +2938,10 @@ server.listen(PORT, "0.0.0.0", () => {
     `[gateway] DROP-DIAG enabled (grep [DROP-DIAG]) gift_window=${DROP_DIAG_GIFT_WINDOW_SEC}s`,
   );
   luckyEngine.refreshConfig(true).catch(() => {});
-  luckyEngine.startPendingCreditWorker(pubClient);
+  luckyEngine.startPendingCreditWorker(pubClient, {
+    track: shutdown.track,
+    isStopping: shutdown.isStopping,
+  });
   console.log("[gateway] lucky engine pending-credit worker started");
+  if (db.getGiftPool()) giftSettle.startGiftRankFlusher();
 });

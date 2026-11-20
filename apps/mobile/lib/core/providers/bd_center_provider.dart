@@ -4,30 +4,33 @@ import 'package:sk_live/core/providers/auth_provider.dart';
 
 final _supabase = Supabase.instance.client;
 
+/// The month the BD centre should show, as plain `YYYY-MM`.
+///
+/// This used to build a half-month id itself — `2026-10-A` before the 16th,
+/// `-B` after. Salary moved to whole months, so on the 10th of October it was
+/// asking the server for `2026-10-A`, a period that no longer carries any work.
+/// Every BD saw a target of \$0 and Work Time 0D/0H.
+///
+/// The app now names only the month and lets the server resolve which salary
+/// period(s) that month is made of, so this cannot drift out of step with the
+/// payroll system again.
 String currentBdPeriodYm([DateTime? now]) {
   final d = now ?? DateTime.now();
-  final m = d.month.toString().padLeft(2, '0');
-  final half = d.day <= 15 ? 'A' : 'B';
-  return '${d.year}-$m-$half';
+  return '${d.year}-${d.month.toString().padLeft(2, '0')}';
 }
 
+/// The months a BD can look back over, newest first, as plain `YYYY-MM`.
 List<String> listBdSelectablePeriods({int count = 12, DateTime? now}) {
   final anchor = now ?? DateTime.now();
   final out = <String>[];
   var y = anchor.year;
   var m = anchor.month;
-  var half = anchor.day <= 15 ? 'A' : 'B';
   for (var i = 0; i < count; i++) {
-    out.add('$y-${m.toString().padLeft(2, '0')}-$half');
-    if (half == 'B') {
-      half = 'A';
-    } else {
-      half = 'B';
-      m -= 1;
-      if (m < 1) {
-        m = 12;
-        y -= 1;
-      }
+    out.add('$y-${m.toString().padLeft(2, '0')}');
+    m -= 1;
+    if (m < 1) {
+      m = 12;
+      y -= 1;
     }
   }
   return out;

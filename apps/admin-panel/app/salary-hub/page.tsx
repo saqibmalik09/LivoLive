@@ -5,18 +5,20 @@ import { AmountValue } from "@/components/AmountValue";
 import { PeriodSalaryOverviewPanel } from "@/components/PeriodSalaryOverview";
 import {
   getPeriodSalaryOverview,
+  getPeriodSalaryOverviewMonthly,
   listAgencies,
   listHosts,
   listStaffByRole,
   listStaffMatching,
   enrichBdStaffPayStatus,
+  resolveBdPeriodId,
   ROLE_LABELS,
   type SalaryHubRole,
   type StaffListItem,
   type AgencyListItem,
   type HostListItem,
 } from "@/lib/salary-hub/queries";
-import { periodToBdMonth, withPeriod } from "@/lib/salary-hub/constants";
+import { withPeriod } from "@/lib/salary-hub/constants";
 import { getHubPeriod } from "@/lib/salary-hub/period";
 import { formatUsd } from "@/lib/salary-hub/salary-calc";
 import { SalaryEntityPayButton } from "@/components/SalaryEntityPayButton";
@@ -36,10 +38,12 @@ function StaffCards({
   staff,
   roleHint,
   period,
+  bdPeriod,
 }: {
   staff: StaffListItem[];
   roleHint: SalaryHubRole | "search";
   period: string;
+  bdPeriod: string;
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -52,7 +56,7 @@ function StaffCards({
             {s.role === "bd" ? (
               <SalaryEntityPayButton
                 kind="bd"
-                periodId={period}
+                periodId={bdPeriod}
                 entityId={s.id}
                 label={s.username}
                 amountUsd={s.bdPayableUsd}
@@ -76,7 +80,7 @@ function StaffCards({
                 </p>
                 {(roleHint === "bd" || s.role === "bd") && s.bdPayableUsd != null ? (
                   <p className="text-xs text-amber-300/80 mt-1 font-bold">
-                    Payable {formatUsd(s.bdPayableUsd ?? 0)} · {periodToBdMonth(period)}
+                    Payable {formatUsd(s.bdPayableUsd ?? 0)} · {bdPeriod}
                   </p>
                 ) : null}
               </div>
@@ -233,8 +237,16 @@ export default async function SalaryHubPage({
   const q = (sp.q || "").trim();
   const searching = q.length > 0;
   const staffRoles = role === "super_bd" || role === "bd_admin" || role === "bd";
+  const bdPeriod = await resolveBdPeriodId(period);
+  const bdMonthlyMode = role === "bd" && bdPeriod.endsWith("-M");
+  const superMonthlyMode = role === "super_bd";
+  const monthPeriod = `${period.slice(0, 7)}-M`;
   const [overview, staffRaw, agencies, hosts] = await Promise.all([
-    getPeriodSalaryOverview(period),
+    bdMonthlyMode
+      ? getPeriodSalaryOverviewMonthly(bdPeriod)
+      : superMonthlyMode
+        ? getPeriodSalaryOverviewMonthly(monthPeriod)
+        : getPeriodSalaryOverview(period),
     searching ? listStaffMatching(q) : staffRoles ? listStaffByRole(role) : Promise.resolve([]),
     searching || role === "agency"
       ? listAgencies(period, searching ? q : undefined)
@@ -245,7 +257,7 @@ export default async function SalaryHubPage({
   ]);
   const staff =
     searching || role === "bd"
-      ? await enrichBdStaffPayStatus(staffRaw, periodToBdMonth(period))
+      ? await enrichBdStaffPayStatus(staffRaw, bdPeriod)
       : staffRaw;
   const showStaff = searching || staffRoles;
   const showAgencies = searching || role === "agency";
@@ -274,7 +286,12 @@ export default async function SalaryHubPage({
         </p>
       </header>
 
-      <SalaryHubFilters role={role} period={period} q={q} />
+      <SalaryHubFilters
+        role={role}
+        period={period}
+        q={q}
+        monthlyMode={bdMonthlyMode || superMonthlyMode}
+      />
 
       <PeriodSalaryOverviewPanel overview={overview} hubLinks />
 
@@ -300,7 +317,12 @@ export default async function SalaryHubPage({
           <p className="text-[10px] font-black uppercase tracking-widest text-white/30">
             {searching ? "Staff" : ROLE_LABELS[role]} · {staff.length}
           </p>
-          <StaffCards staff={staff} roleHint={searching ? "search" : role} period={period} />
+          <StaffCards
+            staff={staff}
+            roleHint={searching ? "search" : role}
+            period={period}
+            bdPeriod={bdPeriod}
+          />
         </section>
       )}
 

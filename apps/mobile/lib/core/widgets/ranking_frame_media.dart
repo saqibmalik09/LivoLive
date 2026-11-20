@@ -64,6 +64,10 @@ class RankingFrameMedia extends StatelessWidget {
       );
     }
 
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final cacheW = width == null ? null : (width! * dpr).round();
+    final cacheH = height == null ? null : (height! * dpr).round();
+
     return CachedNetworkImage(
       imageUrl: trimmed,
 
@@ -74,6 +78,9 @@ class RankingFrameMedia extends StatelessWidget {
       fit: fit,
 
       fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
+      memCacheWidth: cacheW,
+      memCacheHeight: cacheH,
 
       placeholder: (_, _) => const SizedBox.shrink(),
 

@@ -1,6 +1,5 @@
 # Livo / SK Live Party — maintenance workspace
 
-Inexia IT Solution · agreement **INX/LIVO/MSA/2026-01** · term **27 Sep 2026 → 26 Dec 2026**
 Production: `51.222.81.97` (`vps-1873f92d`), Coolify-orchestrated Docker, self-hosted Supabase.
 
 ## How to use this folder
@@ -24,7 +23,6 @@ unpacking as needed. If something is ambiguous I'll ask before moving it.
 | `infra/coolify/` | Coolify config, app settings, notes | Coolify UI on `:8000` |
 | `infra/supabase/` | migrations, schema dumps, SQL, edge functions | supabase-* containers |
 | `infra/traefik/` | routing rules, cert/domain notes | coolify-proxy |
-| `docs/contract/` | agreement, invoices, addenda | — |
 | `docs/handover/` | access checklist, audit findings, code provenance | — |
 | `docs/runbooks/` | restart / redeploy / rollback / restore procedures | — |
 | `ops/scripts/` | maintenance and deploy scripts | — |
@@ -47,11 +45,11 @@ unpacking as needed. If something is ambiguous I'll ask before moving it.
 reformatted snapshots that are already missing server-side hotfixes. See
 `docs/handover/code-provenance.md` before restoring anything from a client zip.
 
-## Open gaps (client still owes these — Clause 5.1(a))
+## Open gaps
 
 Flutter source · Android keystore + iOS certs · Play Console · App Store Connect · Firebase ·
 domain registrar / DNS · VPS provider panel · Orbit, Baishun, Jieyou, Tulasi dashboards ·
-`master` bootstrap password · a dedicated master-panel operator account for Inexia.
+`master` bootstrap password · a dedicated master-panel operator account for the maintainer.
 
 ## Known risks at handover
 

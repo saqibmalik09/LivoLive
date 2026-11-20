@@ -1,7 +1,7 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/providers/podium_rank_frames_provider.dart';
 import 'package:sk_live/core/providers/ranking_podium_preview_provider.dart';
+import 'package:sk_live/core/widgets/app_network_image.dart';
 
 import 'package:sk_live/core/widgets/ranking_frame_media.dart';
 
@@ -87,8 +87,13 @@ class RankingPodiumTop3 extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(avatarRadius),
         child: entry?.avatarUrl != null && entry!.avatarUrl!.isNotEmpty
-            ? CachedNetworkImage(
+            ? AppNetworkImage(
+                // Was a bare CachedNetworkImage on the original URL, so the
+                // podium downloaded full-size photos — ~169 KB for a circle a
+                // few dozen pixels wide — and showed empty placeholders until
+                // they arrived. Through the transform they are ~4.5 KB.
                 imageUrl: entry.avatarUrl!,
+                transformWidth: (avatarSize * 3).round(),
                 fit: BoxFit.cover,
                 errorWidget: (_, _, _) => Icon(
                   isRoom ? Icons.meeting_room : Icons.person,

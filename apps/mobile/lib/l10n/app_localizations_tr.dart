@@ -233,6 +233,9 @@ class AppLocalizationsTr extends AppLocalizations {
   String get profile_resellerPanel => 'Bayi Paneli';
 
   @override
+  String get profile_merchantPanel => 'Satıcı Paneli';
+
+  @override
   String get profile_accountManagement => 'Hesap Yönetimi';
 
   @override
@@ -298,6 +301,15 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'Profilinizi tamamlayın';
+
+  @override
+  String get auth_selectGender => 'Cinsiyetinizi seçin';
+
+  @override
+  String get auth_genderMale => 'Erkek';
+
+  @override
+  String get auth_genderFemale => 'Kadın';
 
   @override
   String get auth_nickname => 'Takma ad';
@@ -623,6 +635,30 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'Oda';
+
+  @override
+  String get party_tabEvent => 'Etkinlik';
+
+  @override
+  String get profile_coin => 'Jeton';
+
+  @override
+  String get home_selectCountry => 'Ülke seç';
+
+  @override
+  String get home_regionMiddleEast => 'Orta Doğu';
+
+  @override
+  String get home_regionAsia => 'Asya';
+
+  @override
+  String get home_regionAmerica => 'Amerika';
+
+  @override
+  String get home_regionEurope => 'Avrupa';
+
+  @override
+  String get home_regionAfrica => 'Afrika';
 
   @override
   String get party_tooltipRanking => 'Sıralama';
@@ -1629,4 +1665,11 @@ class AppLocalizationsTr extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'Bu odadan ayrılmak istediğinizden emin misiniz?';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'Bu odaya girmek istiyor musunuz?';
 }

@@ -8,8 +8,11 @@ import {
   SALARY_HUB_ROLES,
   buildPeriodId,
   listSelectablePeriods,
+  monthPeriodIds,
   parsePeriodId,
+  periodDaysLabel,
   periodLabel,
+  type PeriodPart,
   type SalaryHubRole,
 } from "@/lib/salary-hub/constants";
 function setPeriodCookie(period: string) {
@@ -20,11 +23,13 @@ export function SalaryHubFilters({
   role,
   period,
   q = "",
+  monthlyMode = false,
 }: {
   role: SalaryHubRole;
   period: string;
   q?: string;
   periods?: string[];
+  monthlyMode?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -38,8 +43,10 @@ export function SalaryHubFilters({
   const parsed = parsePeriodId(period) || {
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
-    half: "A" as const,
+    half: "A" as PeriodPart,
   };
+  const cycleIds = monthPeriodIds(parsed.year, parsed.month);
+  const isWeekly = cycleIds.some((id) => /-W[1-4]$/.test(id));
   const monthOptions = (() => {
     const seen = new Set<string>();
     const opts: {
@@ -73,10 +80,12 @@ export function SalaryHubFilters({
   }
   function onMonthChange(ym: string) {
     const [y, m] = ym.split("-").map(Number);
-    go(role, buildPeriodId(y, m, parsed.half));
+    const same = buildPeriodId(y, m, parsed.half);
+    const ids = monthPeriodIds(y, m);
+    go(role, ids.includes(same) ? same : ids[0]);
   }
-  function onHalfChange(half: "A" | "B") {
-    go(role, buildPeriodId(parsed.year, parsed.month, half));
+  function onHalfChange(periodId: string) {
+    go(role, periodId);
   }
   function submitSearch(e?: React.FormEvent) {
     e?.preventDefault();
@@ -159,40 +168,64 @@ export function SalaryHubFilters({
           </select>
         </div>
 
-        <div className="space-y-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-white/40 block">
-            Half (15-day)
-          </span>
-          <div className="flex gap-2">
-            {(["A", "B"] as const).map((half) => {
-              const active = parsed.half === half;
-              return (
-                <button
-                  key={half}
-                  type="button"
-                  onClick={() => onHalfChange(half)}
-                  className={`min-w-[88px] px-4 py-2.5 rounded-xl text-sm font-black border transition-all ${
-                    active
-                      ? "bg-emerald-500/25 border-emerald-400/50 text-emerald-200"
-                      : "bg-white/5 border-white/10 text-white/45 hover:text-white"
-                  }`}
-                >
-                  {half}
-                  <span className="block text-[9px] font-bold uppercase tracking-widest opacity-70 mt-0.5">
-                    {half === "A" ? "1–15" : "16–end"}
-                  </span>
-                </button>
-              );
-            })}
+        {monthlyMode ? (
+          <div className="space-y-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-white/40 block">
+              Cycle
+            </span>
+            <div className="min-w-[160px] px-4 py-2.5 rounded-xl text-sm font-black border bg-emerald-500/25 border-emerald-400/50 text-emerald-200 text-center">
+              MONTHLY
+              <span className="block text-[9px] font-bold uppercase tracking-widest opacity-70 mt-0.5">
+                Full month (1–end)
+              </span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-white/40 block">
+              {isWeekly ? "Week (7-day)" : "Half (15-day)"}
+            </span>
+            <div className="flex gap-2 flex-wrap">
+              {cycleIds.map((id) => {
+                const half = parsePeriodId(id)!.half;
+                const active = parsed.half === half;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onHalfChange(id)}
+                    className={`min-w-[88px] px-4 py-2.5 rounded-xl text-sm font-black border transition-all ${
+                      active
+                        ? "bg-emerald-500/25 border-emerald-400/50 text-emerald-200"
+                        : "bg-white/5 border-white/10 text-white/45 hover:text-white"
+                    }`}
+                  >
+                    {half}
+                    <span className="block text-[9px] font-bold uppercase tracking-widest opacity-70 mt-0.5">
+                      {periodDaysLabel(id)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="sm:ml-auto flex flex-col items-start sm:items-end gap-1">
           <p className="text-[10px] font-black uppercase tracking-widest text-emerald-400/70">
             Active period
           </p>
-          <p className="text-sm font-black text-white">{periodLabel(period)}</p>
-          <p className="text-[10px] text-white/30 font-mono">{period}</p>
+          {(() => {
+            const shown = monthlyMode
+              ? `${parsed.year}-${String(parsed.month).padStart(2, "0")}-M`
+              : period;
+            return (
+              <>
+                <p className="text-sm font-black text-white">{periodLabel(shown)}</p>
+                <p className="text-[10px] text-white/30 font-mono">{shown}</p>
+              </>
+            );
+          })()}
         </div>
 
         <Link

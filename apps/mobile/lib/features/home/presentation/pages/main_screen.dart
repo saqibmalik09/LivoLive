@@ -2,11 +2,10 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pag/pag.dart';
 import 'package:sk_live/core/constants/app_layout.dart';
 import 'package:sk_live/core/l10n/l10n_ext.dart';
 import 'package:sk_live/core/providers/bottom_nav_config_provider.dart';
-import 'package:sk_live/core/providers/party_screen_config_provider.dart';
-import 'package:sk_live/features/home/presentation/widgets/bottom_nav_background_image.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/navigation_provider.dart';
@@ -310,7 +309,8 @@ class _MainScreenState extends ConsumerState<MainScreen>
         activeNavKey == 'home' ||
         activeNavKey == 'party' ||
         activeNavKey == 'message' ||
-        activeNavKey == 'game';
+        activeNavKey == 'game' ||
+        activeNavKey == 'my';
 
     final screens = navItems.map((item) {
       if (_builtNavKeys.contains(item.navKey)) {
@@ -387,17 +387,21 @@ class _CompactBottomNav extends ConsumerWidget {
   final List<BottomNavItemModel> items;
   final ValueChanged<int> onTap;
 
+  static const String _barArt = 'assets/design/nav/nav_bg_desert_dragons.webp';
+  static const double _iconCentre = 118 / 254;
+  static const double _labelCentre = 184 / 254;
+  static const double _tapTop = 58 / 254;
+  static const Color _labelSelected = Color(0xFF4C2D03);
+  static const Color _labelUnselected = Color(0xFFAA903C);
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
-    final partyConfig =
-        ref.watch(partyScreenConfigProvider).valueOrNull ??
-        PartyScreenConfig.empty();
-
-    final totalHeight = bottomNavTotalHeight(context);
+    final s = MediaQuery.sizeOf(context).width / 750;
+    final barH = refNavBarHeight(context);
 
     return SizedBox(
-      height: totalHeight,
+      height: bottomNavTotalHeight(context),
       child: Stack(
         clipBehavior: Clip.none,
         fit: StackFit.expand,
@@ -405,84 +409,69 @@ class _CompactBottomNav extends ConsumerWidget {
           Positioned(
             left: 0,
             right: 0,
+            top: 0,
             bottom: 0,
-            height:
-                MediaQuery.paddingOf(context).bottom + kAppBottomNavBarHeight,
-            child: BottomNavBackgroundImage(config: partyConfig),
+            child: IgnorePointer(
+              child: Image.asset(
+                _barArt,
+                fit: BoxFit.fill,
+                alignment: Alignment.topCenter,
+                filterQuality: FilterQuality.medium,
+                gaplessPlayback: true,
+              ),
+            ),
           ),
           Positioned(
             left: 0,
             right: 0,
+            top: barH * _tapTop,
             bottom: bottomInset,
-            height: kAppBottomNavBarHeight + kBottomNavIconFloat,
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
               children: List.generate(items.length, (index) {
                 final item = items[index];
                 final selected = index == currentIndex;
-                final labelColor = selected
-                    ? AppColors.gold
-                    : (isImmersiveTab ? Colors.white : AppColors.textSecondary);
-
+                final iconCanvas = (selected ? 104.0 : 100.0) * s;
+                final areaTop = barH * _tapTop;
                 return Expanded(
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => onTap(index),
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
-                      child: SizedBox(
-                        height: kAppBottomNavBarHeight + kBottomNavIconFloat,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Transform.translate(
-                              offset: const Offset(0, -kBottomNavIconFloat),
-                              child: SizedBox(
-                                height: kBottomNavIconSlotHeight,
-                                width: double.infinity,
-                                child: Center(
-                                  child: selected
-                                      ? _NavActiveIcon(
-                                          key: ValueKey(
-                                            'nav-focus-${item.navKey}',
-                                          ),
-                                          item: item,
-                                        )
-                                      : _NavIcon(
-                                          item: item,
-                                          size: kBottomNavIconSize,
-                                        ),
-                                ),
-                              ),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onTap(index),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: barH * _iconCentre - areaTop - iconCanvas / 2,
+                          height: iconCanvas,
+                          child: Center(
+                            child: _RefNavIcon(
+                              item: item,
+                              selected: selected,
+                              size: iconCanvas,
                             ),
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: Text(
-                                context.navLabel(item.navKey, item.label),
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  height: 1.0,
-                                  fontWeight: selected
-                                      ? FontWeight.bold
-                                      : FontWeight.w500,
-                                  color: labelColor,
-                                  shadows: isImmersiveTab && !selected
-                                      ? const [
-                                          Shadow(
-                                            blurRadius: 4,
-                                            color: Colors.black45,
-                                          ),
-                                        ]
-                                      : null,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
+                        Positioned(
+                          left: 2,
+                          right: 2,
+                          top: barH * _labelCentre - areaTop - 14 * s,
+                          child: Text(
+                            context.navLabel(item.navKey, item.label),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 21 * s,
+                              height: 1.3,
+                              fontWeight: FontWeight.w500,
+                              color: selected
+                                  ? _labelSelected
+                                  : _labelUnselected,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -490,6 +479,51 @@ class _CompactBottomNav extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RefNavIcon extends StatelessWidget {
+  const _RefNavIcon({
+    required this.item,
+    required this.selected,
+    required this.size,
+  });
+
+  final BottomNavItemModel item;
+  final bool selected;
+  final double size;
+
+  static const Map<String, String> _assets = {
+    'home': 'assets/design/nav/nav_1_home.pag',
+    'party': 'assets/design/nav/nav_2_party.pag',
+    'game': 'assets/design/nav/nav_3_game.pag',
+    'message': 'assets/design/nav/nav_4_message.pag',
+    'my': 'assets/design/nav/nav_5_my.pag',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = selected
+        ? _NavActiveIcon(key: ValueKey('nav-focus-${item.navKey}'), item: item)
+        : _NavIcon(item: item, size: kBottomNavIconSize);
+    final asset = _assets[item.navKey];
+    if (asset == null) return fallback;
+    return RepaintBoundary(
+      child: PAGView.asset(
+        asset,
+        key: ValueKey('nav-pag-${item.navKey}-$selected'),
+        width: size,
+        height: size,
+        repeatCount: 1,
+        autoPlay: selected,
+        initProgress: 0,
+        defaultBuilder: (_) => SizedBox(
+          width: size,
+          height: size,
+          child: Center(child: fallback),
+        ),
       ),
     );
   }

@@ -20,10 +20,6 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     defaultConfig {
         applicationId = "com.sklive.app"
         minSdk = flutter.minSdkVersion
@@ -67,14 +63,20 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 flutter {
     source = "../.."
 }
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    implementation("com.google.firebase:firebase-messaging-ktx")
-    implementation("com.google.firebase:firebase-crashlytics-ktx")
+    // Messaging and Crashlytics come from the FlutterFire plugins, which pin
+    // them through the Firebase BoM. The old -ktx artifacts are no longer published.
   // For image_cropper (UCrop)
     implementation("com.github.yalantis:ucrop:2.2.8")
     implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")

@@ -23,7 +23,7 @@ function isLuckyProCategory(categoryName) {
   return n === "lucky pro" || n === "lucky_pro" || n === "luckypro";
 }
 async function loadGift(giftId) {
-  const { rows: rows } = await db.query(
+  const { rows: rows } = await db.giftQuery(
     `SELECT si.id, si.name, si.price_coins,\n            coalesce(si.image_url, '') AS icon_url,\n            si.svga_url, si.is_full_screen,\n            lower(coalesce(sc.name, '')) AS category_name\n     FROM public.shop_items si\n     LEFT JOIN public.shop_categories sc ON sc.id = si.category_id\n     WHERE si.id = $1 AND si.is_active = TRUE\n     LIMIT 1`,
     [giftId],
   );
@@ -36,7 +36,7 @@ async function loadUsernames(userIds) {
     ),
   ];
   if (!ids.length) return {};
-  const { rows: rows } = await db.query(
+  const { rows: rows } = await db.giftQuery(
     `SELECT id::text AS id, username, avatar_url\n     FROM public.users\n     WHERE id = ANY($1::uuid[])`,
     [ids],
   );
@@ -71,26 +71,25 @@ async function settleGifts({
     return { success: false, message: "No receivers", results: [] };
   }
   const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
-  const settled = await Promise.all(
-    targets.map(async (receiverId) => {
-      try {
-        const { rows: rows } = await db.query(
-          `SELECT public.send_gift($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::int, 'gateway') AS r`,
-          [senderId, receiverId, giftId, roomId, qty],
-        );
-        const one = parseJson(rows[0]?.r) || {};
-        return { receiver_id: receiverId, result: one };
-      } catch (err) {
-        return {
-          receiver_id: receiverId,
-          result: {
-            success: false,
-            message: err.message || "send_gift failed",
-          },
-        };
-      }
-    }),
-  );
+  const settled = [];
+  for (const receiverId of targets) {
+    try {
+      const { rows: rows } = await db.giftQuery(
+        `SELECT public.send_gift($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::int, 'gateway') AS r`,
+        [senderId, receiverId, giftId, roomId, qty],
+      );
+      const one = parseJson(rows[0]?.r) || {};
+      settled.push({ receiver_id: receiverId, result: one });
+    } catch (err) {
+      settled.push({
+        receiver_id: receiverId,
+        result: {
+          success: false,
+          message: err.message || "send_gift failed",
+        },
+      });
+    }
+  }
   const anyOk = settled.some(
     (row) => row.result && row.result.success === true,
   );
@@ -293,7 +292,7 @@ async function persistGiftMessages(messages) {
   if (!Array.isArray(messages) || !messages.length) return;
   for (const msg of messages) {
     try {
-      await db.query(
+      await db.giftQuery(
         `INSERT INTO public.room_messages (room_id, user_id, content, type, metadata)\n         VALUES ($1::uuid, $2::uuid, $3, 'gift', $4::jsonb)`,
         [
           msg.room_id,
@@ -307,7 +306,40 @@ async function persistGiftMessages(messages) {
     }
   }
 }
+const RANK_FLUSH_MS = 2e3;
+const RANK_FLUSH_BATCH = 5000;
+function startGiftRankFlusher() {
+  let running = false;
+  let stopped = false;
+  const timer = setInterval(async () => {
+    if (running || stopped) return;
+    running = true;
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        const { rows } = await db.giftQuery(
+          `SELECT public.flush_gift_rank_queue($1) AS n`,
+          [RANK_FLUSH_BATCH],
+        );
+        if (Number(rows[0]?.n) < RANK_FLUSH_BATCH) break;
+      }
+    } catch (err) {
+      if (err.code === "42883") {
+        stopped = true;
+        clearInterval(timer);
+        console.warn("[gift_rank] flush function not installed — flusher off");
+      } else {
+        console.warn("[gift_rank] flush failed:", err.message);
+      }
+    } finally {
+      running = false;
+    }
+  }, RANK_FLUSH_MS);
+  timer.unref?.();
+  return timer;
+}
+
 module.exports = {
+  startGiftRankFlusher: startGiftRankFlusher,
   loadGift: loadGift,
   isLuckyCategory: isLuckyCategory,
   isLuckyProCategory: isLuckyProCategory,

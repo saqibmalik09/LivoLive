@@ -81,6 +81,7 @@
   "profile_cpNest": "CP Nest",
   "profile_buddies": "Buddies",
   "profile_resellerPanel": "Reseller Panel",
+  "profile_merchantPanel": "Merchant Panel",
   "profile_accountManagement": "Account Management",
   "profile_staffCenter": "{role} Center",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "Resend Code",
   "auth_verificationSuccessful": "Verification Successful!",
   "auth_completeProfileTitle": "Complete your profile",
+  "auth_selectGender": "Select your gender",
+  "auth_genderMale": "Male",
+  "auth_genderFemale": "Female",
   "auth_nickname": "Nickname",
   "auth_hintEnter": "Enter",
   "auth_basicInformation": "Basic Information",
@@ -257,6 +261,14 @@
   "party_mineTitle": "Mine",
   "party_tabHot": "Hot",
   "party_tabRoom": "Room",
+  "party_tabEvent": "Event",
+  "profile_coin": "Coin",
+  "home_selectCountry": "Select country",
+  "home_regionMiddleEast": "Middle East",
+  "home_regionAsia": "Asia",
+  "home_regionAmerica": "America",
+  "home_regionEurope": "Europe",
+  "home_regionAfrica": "Africa",
   "party_tooltipRanking": "Ranking",
   "party_tooltipSearch": "Search",
   "party_tooltipMyRoom": "My Room",
@@ -646,5 +658,13 @@
   "blacklist_unblock": "Unblock",
   "blacklist_unblocked": "User unblocked",
   "blacklist_noRoom": "You don't have a room yet",
-  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat."
+  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat.",
+  "topBanner_leaveRoomConfirm": "Are you sure you want to leave this room?",
+  "topBanner_enterRoomConfirm": "Do you want to enter this room?",
+  "@topBanner_leaveRoomConfirm": {
+    "description": "Top win banner tapped while in a room: confirm before going to the winner's room."
+  },
+  "@topBanner_enterRoomConfirm": {
+    "description": "Top win banner tapped outside any room: confirm before going to the winner's room."
+  }
 }

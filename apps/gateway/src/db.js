@@ -22,12 +22,112 @@ async function query(text, params) {
   if (!p) throw new Error("DATABASE_URL not configured");
   return p.query(text, params);
 }
+
+let gamePool = null;
+function gamePoolMax() {
+  const n = Number(process.env.BAISHUN_DB_POOL_MAX);
+  return Number.isInteger(n) && n > 0 ? n : 6;
+}
+function getGamePool() {
+  if (gamePool) return gamePool;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return null;
+  gamePool = new Pool({
+    connectionString: connectionString,
+    ssl: connectionString.includes("supabase.com")
+      ? { rejectUnauthorized: false }
+      : undefined,
+    max: gamePoolMax(),
+  });
+  gamePool.on("error", (err) =>
+    console.error("[db] game pool error:", err.message),
+  );
+  return gamePool;
+}
+
+function connectGameClient(waitMs) {
+  const p = getGamePool();
+  if (!p) return Promise.reject(new Error("DATABASE_URL not configured"));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(
+      () => {
+        if (settled) return;
+        settled = true;
+        const err = new Error("game db wait timeout");
+        err.code = "GAME_DB_WAIT_TIMEOUT";
+        reject(err);
+      },
+      Math.max(1, Math.floor(waitMs)),
+    );
+    p.connect().then(
+      (client) => {
+        if (settled) {
+          client.release();
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(client);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+async function withGameClient(waitMs, fn) {
+  const client = await connectGameClient(waitMs);
+  let failed = false;
+  try {
+    return await fn(client);
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    client.release(failed);
+  }
+}
+
+let giftPool = null;
+function giftPoolMax() {
+  const n = Number(process.env.GIFT_DB_POOL_MAX);
+  return Number.isInteger(n) && n > 0 ? n : 6;
+}
+function getGiftPool() {
+  if (giftPool) return giftPool;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return null;
+  giftPool = new Pool({
+    connectionString: connectionString,
+    ssl: connectionString.includes("supabase.com")
+      ? { rejectUnauthorized: false }
+      : undefined,
+    max: giftPoolMax(),
+    connectionTimeoutMillis: 15e3,
+    statement_timeout: 15e3,
+  });
+  giftPool.on("error", (err) =>
+    console.error("[db] gift pool error:", err.message),
+  );
+  return giftPool;
+}
+async function giftQuery(text, params) {
+  const p = getGiftPool();
+  if (!p) throw new Error("DATABASE_URL not configured");
+  return p.query(text, params);
+}
+
 async function loadRoomSeats(roomId) {
   const { rows: rows } = await query(
     `SELECT s.id, s.room_id, s.user_id, s.seat_index, s.is_muted, s.is_locked, s.updated_at,\n            u.username, u.avatar_url, u.vip_level\n     FROM room_seats s\n     LEFT JOIN users u ON u.id = s.user_id\n     WHERE s.room_id = $1\n     ORDER BY s.seat_index ASC`,
     [roomId],
   );
-  return rows.map((r) => ({
+  const seats = rows.map((r) => ({
     id: r.id,
     room_id: r.room_id,
     user_id: r.user_id,
@@ -44,6 +144,279 @@ async function loadRoomSeats(roomId) {
         }
       : null,
   }));
+  await attachSeatWear(seats);
+  return seats;
+}
+function wearText(value) {
+  return value == null ? "" : String(value);
+}
+function isSeatFrameCategory(category) {
+  return (
+    category === "profile photo frame" ||
+    (category.includes("frame") && !category.includes("card"))
+  );
+}
+function isSeatTitle(category, name) {
+  if (
+    category === "profile photo frame" ||
+    category === "car" ||
+    category === "entrance show" ||
+    category.includes("bubble") ||
+    category.includes("gift") ||
+    category.includes("lucky") ||
+    category.includes("profile card")
+  ) {
+    return false;
+  }
+  if (
+    category.includes("title") ||
+    category.includes("nameplate") ||
+    category.includes("name plate")
+  ) {
+    return true;
+  }
+  return (name || "").includes("title");
+}
+function isSeatMedal(category, sourceType) {
+  return (
+    sourceType === "medal" ||
+    category.includes("medal") ||
+    (category.includes("badge") && !category.includes("title"))
+  );
+}
+async function attachSeatWear(seats) {
+  const ids = [];
+  for (const seat of seats) {
+    if (seat && seat.user_id && !ids.includes(seat.user_id)) {
+      ids.push(seat.user_id);
+    }
+  }
+  if (!ids.length) return;
+  let inventory;
+  let levels;
+  try {
+    const [invRes, levelRes] = await Promise.all([
+      query(
+        `SELECT ui.user_id, si.image_url, si.svga_url, si.name,
+                lower(coalesce(si.source_type, '')) AS source_type,
+                lower(coalesce(sc.name, '')) AS category
+         FROM user_inventory ui
+         JOIN shop_items si ON si.id = ui.item_id
+         LEFT JOIN shop_categories sc ON sc.id = si.category_id
+         WHERE ui.user_id = ANY($1::uuid[])
+           AND ui.is_equipped = true
+           AND (ui.expires_at IS NULL OR ui.expires_at > now())`,
+        [ids],
+      ),
+      query(
+        `SELECT u.id AS user_id,
+                COALESCE(u.wealth_level, 1) AS wealth_level,
+                COALESCE(u.charm_level, 1) AS charm_level,
+                COALESCE(u.vip_level, 0) AS vip_level,
+                wl.badge_url AS wealth_badge,
+                (SELECT cl.image_url FROM charm_level_assets cl
+                  WHERE cl.level = COALESCE(u.charm_level, 1)
+                    AND cl.feature_key = 'badge'
+                  LIMIT 1) AS charm_badge,
+                (SELECT v.image_url FROM vip_level_assets v
+                  WHERE v.level = u.vip_level
+                    AND v.feature_key = 'has_vip_title'
+                  LIMIT 1) AS vip_badge,
+                (SELECT fa.image_url FROM families f
+                  JOIN family_level_assets fa
+                    ON fa.feature_key = 'badge' AND fa.level <= f.level
+                  WHERE f.id = u.family_id
+                  ORDER BY fa.level DESC
+                  LIMIT 1) AS family_badge,
+                (SELECT f.level FROM families f WHERE f.id = u.family_id) AS family_level,
+                cp.cp_level,
+                cpc.badge_url AS cp_badge,
+                cpc.frame_url AS cp_frame
+         FROM users u
+         LEFT JOIN level_configs wl
+           ON wl.category = 'user_wealth'
+          AND wl.level = COALESCE(u.wealth_level, 1)
+         LEFT JOIN LATERAL (
+           SELECT c.cp_level
+           FROM couples c
+           WHERE c.user1_id = u.id OR c.user2_id = u.id
+           ORDER BY c.cp_level DESC NULLS LAST
+           LIMIT 1
+         ) cp ON true
+         LEFT JOIN cp_level_configs cpc
+           ON cp.cp_level IS NOT NULL
+          AND cpc.level = GREATEST(cp.cp_level, 1)
+         WHERE u.id = ANY($1::uuid[])`,
+        [ids],
+      ),
+    ]);
+    inventory = invRes.rows || [];
+    levels = levelRes.rows || [];
+  } catch (err) {
+    console.warn("[seats] wear attach skipped:", err.message);
+    return;
+  }
+  const agencyByUser = new Map();
+  try {
+    const { rows: agencyRows } = await query(
+      `SELECT u.id AS user_id,
+              COALESCE(owned.name, mem.name, 'Agency') AS name,
+              COALESCE(owned.id, mem.id) AS agency_id,
+              alc.badge_url,
+              alc.level
+       FROM users u
+       LEFT JOIN LATERAL (
+         SELECT a.id, a.name FROM agencies a WHERE a.owner_id = u.id LIMIT 1
+       ) owned ON true
+       LEFT JOIN LATERAL (
+         SELECT a.id, a.name
+         FROM agency_members m
+         JOIN agencies a ON a.id = m.agency_id
+         WHERE m.user_id = u.id
+         LIMIT 1
+       ) mem ON owned.id IS NULL
+       JOIN agency_rankings ar
+         ON ar.agency_id = COALESCE(owned.id, mem.id)
+        AND ar.ranking_type = 'weekly'
+       JOIN LATERAL (
+         SELECT c.level, c.badge_url
+         FROM agency_level_configs c
+         WHERE c.min_exp <= COALESCE(ar.score, 0)
+         ORDER BY c.min_exp DESC
+         LIMIT 1
+       ) alc ON alc.badge_url IS NOT NULL AND alc.badge_url <> ''
+       WHERE u.id = ANY($1::uuid[])`,
+      [ids],
+    );
+    for (const row of agencyRows || []) {
+      agencyByUser.set(String(row.user_id), row);
+    }
+  } catch (err) {
+    console.warn("[seats] agency badge skipped:", err.message);
+  }
+  const invByUser = new Map();
+  for (const row of inventory) {
+    const id = String(row.user_id);
+    const list = invByUser.get(id);
+    if (list) list.push(row);
+    else invByUser.set(id, [row]);
+  }
+  const levelByUser = new Map();
+  for (const row of levels) levelByUser.set(String(row.user_id), row);
+  for (const seat of seats) {
+    if (!seat || !seat.user || !seat.user_id) continue;
+    const id = String(seat.user_id);
+    const items = invByUser.get(id) || [];
+    const level = levelByUser.get(id);
+    let frameImage = "";
+    let frameSvga = "";
+    const badges = [];
+    for (const item of items) {
+      const category = wearText(item.category);
+      const name = wearText(item.name);
+      const image = wearText(item.image_url).trim();
+      const svga = wearText(item.svga_url).trim();
+      if (!frameImage && !frameSvga && isSeatFrameCategory(category)) {
+        frameImage = image;
+        frameSvga = svga;
+        continue;
+      }
+      if (!image) continue;
+      if (isSeatTitle(category, name.toLowerCase())) {
+        badges.push({
+          name: name || "Item",
+          image_url: image,
+          type: "title",
+          priority: 35,
+          isEquipped: true,
+        });
+      } else if (isSeatMedal(category, wearText(item.source_type))) {
+        badges.push({
+          name: name || "Item",
+          image_url: image,
+          type: "medal",
+          priority: 45,
+          isEquipped: true,
+        });
+      }
+    }
+    const cpLevel = Number(level && level.cp_level) || 0;
+    if (!frameImage && !frameSvga && cpLevel > 0) {
+      frameImage = wearText(level.cp_frame).trim();
+    }
+    if (level) {
+      const wealthLevel = Number(level.wealth_level) || 1;
+      const wealthUrl = wearText(level.wealth_badge).trim();
+      if (wealthUrl) {
+        badges.push({
+          name: `Wealth Lv.${wealthLevel}`,
+          image_url: wealthUrl,
+          level: wealthLevel,
+          type: "wealth",
+          priority: 1,
+        });
+      }
+      const charmLevel = Number(level.charm_level) || 1;
+      const charmUrl = wearText(level.charm_badge).trim();
+      if (charmUrl) {
+        badges.push({
+          name: `Charm Lv.${charmLevel}`,
+          image_url: charmUrl,
+          level: charmLevel,
+          type: "charm",
+          priority: 2,
+        });
+      }
+      const vipLevel = Number(level.vip_level) || 0;
+      const vipUrl = wearText(level.vip_badge).trim();
+      if (vipLevel > 0 && vipUrl) {
+        badges.push({
+          name: `VIP ${vipLevel}`,
+          image_url: vipUrl,
+          type: "vip",
+          priority: 0,
+        });
+      }
+      const familyUrl = wearText(level.family_badge).trim();
+      const familyLevel = Number(level.family_level) || 0;
+      if (familyUrl && familyLevel > 0) {
+        badges.push({
+          name: `Family Lv.${familyLevel}`,
+          image_url: familyUrl,
+          level: familyLevel,
+          type: "family",
+          priority: 4,
+        });
+      }
+      const cpUrl = wearText(level.cp_badge).trim();
+      if (level.cp_level != null && cpUrl) {
+        const badgeLevel = Math.max(cpLevel, 1);
+        badges.push({
+          name: `CP Lv.${badgeLevel}`,
+          image_url: cpUrl,
+          level: badgeLevel,
+          type: "cp",
+          priority: 3,
+        });
+      }
+    }
+    const agency = agencyByUser.get(id);
+    const agencyUrl = wearText(agency && agency.badge_url).trim();
+    if (agencyUrl) {
+      badges.push({
+        name: wearText(agency.name).trim() || "Agency",
+        image_url: agencyUrl,
+        level: Number(agency.level) || 0,
+        type: "agency",
+        priority: 5,
+        refId: agency.agency_id ? String(agency.agency_id) : null,
+      });
+    }
+    badges.sort((a, b) => a.priority - b.priority);
+    seat.user.frame_image_url = frameImage;
+    seat.user.frame_svga_url = frameSvga;
+    seat.user.badges = badges;
+  }
 }
 async function loadRoomMeta(roomId) {
   const { rows: rows } = await query(
@@ -87,28 +460,58 @@ async function seatClaim({
   const conflictWhere = bypassLock
     ? ` WHERE (room_seats.user_id IS NULL\n              OR room_seats.user_id = EXCLUDED.user_id)`
     : ` WHERE room_seats.is_locked = false\n         AND (room_seats.user_id IS NULL\n              OR room_seats.user_id = EXCLUDED.user_id)`;
-  // The claim must land BEFORE the old seat is released. Previously the DELETE
-  // sat in its own CTE, and a data-modifying CTE always runs — so a rejected
-  // claim (seat taken or locked) still vacated the seat the user was already
-  // on, leaving them on no seat while the UI still showed them seated. That
-  // mismatch is what surfaced as a duplicated user plus an error on mic move.
-  // Referencing `ins` from `cleared` makes the delete conditional on the insert
-  // actually returning a row.
-  const { rows: rows } = await query(
-    `WITH ins AS (\n       INSERT INTO room_seats (room_id, user_id, seat_index, is_muted, is_locked)\n       VALUES ($1, $2, $3, $4, false)\n       ON CONFLICT (room_id, seat_index)\n       DO UPDATE SET user_id = EXCLUDED.user_id, is_muted = EXCLUDED.is_muted,\n                     is_locked = false, updated_at = now()\n      ${conflictWhere}\n       RETURNING id, room_id, user_id, seat_index, is_muted, is_locked\n     ), cleared AS (\n       DELETE FROM room_seats\n       WHERE room_id = $1 AND user_id = $2 AND seat_index <> $3\n         AND EXISTS (SELECT 1 FROM ins)\n       RETURNING seat_index\n     )\n     SELECT ins.*, (SELECT seat_index FROM cleared LIMIT 1) AS vacated_seat_index\n     FROM ins`,
-    [roomId, userId, seatIndex, !!isMuted],
-  );
-  if (rows[0]) return rows[0];
-  const { rows: holder } = await query(
-    `SELECT user_id, is_locked FROM room_seats\n     WHERE room_id = $1 AND seat_index = $2\n     LIMIT 1`,
-    [roomId, seatIndex],
-  );
-  if (!holder[0]) return null;
-  const err = new Error("seat_unavailable");
-  err.code = "seat_unavailable";
-  err.occupantId = holder[0].user_id ?? null;
-  err.locked = !!holder[0].is_locked;
-  throw err;
+  const p = getPool();
+  if (!p) throw new Error("DATABASE_URL not configured");
+  const client = await p.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: clearedRows } = await client.query(
+      `DELETE FROM room_seats
+       WHERE room_id = $1 AND user_id = $2 AND seat_index <> $3
+       RETURNING seat_index`,
+      [roomId, userId, seatIndex],
+    );
+    const { rows: rows } = await client.query(
+      `INSERT INTO room_seats (room_id, user_id, seat_index, is_muted, is_locked)
+       VALUES ($1, $2, $3, $4, false)
+       ON CONFLICT (room_id, seat_index)
+       DO UPDATE SET user_id = EXCLUDED.user_id, is_muted = EXCLUDED.is_muted,
+                     is_locked = false, updated_at = now()
+      ${conflictWhere}
+       RETURNING id, room_id, user_id, seat_index, is_muted, is_locked`,
+      [roomId, userId, seatIndex, !!isMuted],
+    );
+    if (rows[0]) {
+      await client.query("COMMIT");
+      return {
+        ...rows[0],
+        vacated_seat_index: clearedRows[0]
+          ? clearedRows[0].seat_index
+          : null,
+      };
+    }
+    await client.query("ROLLBACK");
+    const { rows: holder } = await client.query(
+      `SELECT user_id, is_locked FROM room_seats
+       WHERE room_id = $1 AND seat_index = $2
+       LIMIT 1`,
+      [roomId, seatIndex],
+    );
+    if (!holder[0]) return null;
+    const err = new Error("seat_unavailable");
+    err.code = "seat_unavailable";
+    err.occupantId = holder[0].user_id ?? null;
+    err.locked = !!holder[0].is_locked;
+    throw err;
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 async function seatLeave({
   roomId: roomId,
@@ -435,6 +838,10 @@ async function getActiveRoomKick(roomId, userId) {
 module.exports = {
   getPool: getPool,
   query: query,
+  getGamePool: getGamePool,
+  withGameClient: withGameClient,
+  getGiftPool: getGiftPool,
+  giftQuery: giftQuery,
   loadRoomSeats: loadRoomSeats,
   loadRoomMeta: loadRoomMeta,
   updateRoomSharedAudioState: updateRoomSharedAudioState,

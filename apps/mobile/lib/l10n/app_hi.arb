@@ -81,6 +81,7 @@
   "profile_cpNest": "सीपी नेस्ट",
   "profile_buddies": "दोस्तों",
   "profile_resellerPanel": "पुनर्विक्रेता पैनल",
+  "profile_merchantPanel": "मर्चेंट पैनल",
   "profile_accountManagement": "खाता प्रबंधन",
   "profile_staffCenter": "{role} केंद्र",
   "@profile_staffCenter": {
@@ -109,6 +110,9 @@
   "auth_resendCode": "पुन: कोड भेजे",
   "auth_verificationSuccessful": "सत्यापन सफल!",
   "auth_completeProfileTitle": "अपनी प्रोफ़ाइल पूरी करें",
+  "auth_selectGender": "अपना लिंग चुनें",
+  "auth_genderMale": "पुरुष",
+  "auth_genderFemale": "महिला",
   "auth_nickname": "उपनाम",
   "auth_hintEnter": "प्रवेश करना",
   "auth_basicInformation": "मूल जानकारी",
@@ -257,6 +261,14 @@
   "party_mineTitle": "मेरा",
   "party_tabHot": "गर्म",
   "party_tabRoom": "कमरा",
+  "party_tabEvent": "इवेंट",
+  "profile_coin": "सिक्का",
+  "home_selectCountry": "देश चुनें",
+  "home_regionMiddleEast": "मध्य पूर्व",
+  "home_regionAsia": "एशिया",
+  "home_regionAmerica": "अमेरिका",
+  "home_regionEurope": "यूरोप",
+  "home_regionAfrica": "अफ्रीका",
   "party_tooltipRanking": "श्रेणी",
   "party_tooltipSearch": "खोज",
   "party_tooltipMyRoom": "मेरा कमरा",
@@ -646,5 +658,7 @@
   "blacklist_unblock": "Unblock",
   "blacklist_unblocked": "User unblocked",
   "blacklist_noRoom": "You don't have a room yet",
-  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat."
+  "chat_blockedCannotMessage": "You cannot send or receive messages in this chat.",
+  "topBanner_leaveRoomConfirm": "क्या आप वाकई इस रूम को छोड़ना चाहते हैं?",
+  "topBanner_enterRoomConfirm": "क्या आप इस रूम में जाना चाहते हैं?"
 }

@@ -556,6 +556,12 @@ abstract class AppLocalizations {
   /// **'Reseller Panel'**
   String get profile_resellerPanel;
 
+  /// No description provided for @profile_merchantPanel.
+  ///
+  /// In en, this message translates to:
+  /// **'Merchant Panel'**
+  String get profile_merchantPanel;
+
   /// No description provided for @profile_accountManagement.
   ///
   /// In en, this message translates to:
@@ -681,6 +687,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Complete your profile'**
   String get auth_completeProfileTitle;
+
+  /// No description provided for @auth_selectGender.
+  ///
+  /// In en, this message translates to:
+  /// **'Select your gender'**
+  String get auth_selectGender;
+
+  /// No description provided for @auth_genderMale.
+  ///
+  /// In en, this message translates to:
+  /// **'Male'**
+  String get auth_genderMale;
+
+  /// No description provided for @auth_genderFemale.
+  ///
+  /// In en, this message translates to:
+  /// **'Female'**
+  String get auth_genderFemale;
 
   /// No description provided for @auth_nickname.
   ///
@@ -1275,6 +1299,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Room'**
   String get party_tabRoom;
+
+  /// No description provided for @party_tabEvent.
+  ///
+  /// In en, this message translates to:
+  /// **'Event'**
+  String get party_tabEvent;
+
+  /// No description provided for @profile_coin.
+  ///
+  /// In en, this message translates to:
+  /// **'Coin'**
+  String get profile_coin;
+
+  /// No description provided for @home_selectCountry.
+  ///
+  /// In en, this message translates to:
+  /// **'Select country'**
+  String get home_selectCountry;
+
+  /// No description provided for @home_regionMiddleEast.
+  ///
+  /// In en, this message translates to:
+  /// **'Middle East'**
+  String get home_regionMiddleEast;
+
+  /// No description provided for @home_regionAsia.
+  ///
+  /// In en, this message translates to:
+  /// **'Asia'**
+  String get home_regionAsia;
+
+  /// No description provided for @home_regionAmerica.
+  ///
+  /// In en, this message translates to:
+  /// **'America'**
+  String get home_regionAmerica;
+
+  /// No description provided for @home_regionEurope.
+  ///
+  /// In en, this message translates to:
+  /// **'Europe'**
+  String get home_regionEurope;
+
+  /// No description provided for @home_regionAfrica.
+  ///
+  /// In en, this message translates to:
+  /// **'Africa'**
+  String get home_regionAfrica;
 
   /// No description provided for @party_tooltipRanking.
   ///
@@ -3195,6 +3267,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'You cannot send or receive messages in this chat.'**
   String get chat_blockedCannotMessage;
+
+  /// Top win banner tapped while in a room: confirm before going to the winner's room.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to leave this room?'**
+  String get topBanner_leaveRoomConfirm;
+
+  /// Top win banner tapped outside any room: confirm before going to the winner's room.
+  ///
+  /// In en, this message translates to:
+  /// **'Do you want to enter this room?'**
+  String get topBanner_enterRoomConfirm;
 }
 
 class _AppLocalizationsDelegate

@@ -233,6 +233,9 @@ class AppLocalizationsHi extends AppLocalizations {
   String get profile_resellerPanel => 'पुनर्विक्रेता पैनल';
 
   @override
+  String get profile_merchantPanel => 'मर्चेंट पैनल';
+
+  @override
   String get profile_accountManagement => 'खाता प्रबंधन';
 
   @override
@@ -298,6 +301,15 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'अपनी प्रोफ़ाइल पूरी करें';
+
+  @override
+  String get auth_selectGender => 'अपना लिंग चुनें';
+
+  @override
+  String get auth_genderMale => 'पुरुष';
+
+  @override
+  String get auth_genderFemale => 'महिला';
 
   @override
   String get auth_nickname => 'उपनाम';
@@ -619,6 +631,30 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'कमरा';
+
+  @override
+  String get party_tabEvent => 'इवेंट';
+
+  @override
+  String get profile_coin => 'सिक्का';
+
+  @override
+  String get home_selectCountry => 'देश चुनें';
+
+  @override
+  String get home_regionMiddleEast => 'मध्य पूर्व';
+
+  @override
+  String get home_regionAsia => 'एशिया';
+
+  @override
+  String get home_regionAmerica => 'अमेरिका';
+
+  @override
+  String get home_regionEurope => 'यूरोप';
+
+  @override
+  String get home_regionAfrica => 'अफ्रीका';
 
   @override
   String get party_tooltipRanking => 'श्रेणी';
@@ -1623,4 +1659,11 @@ class AppLocalizationsHi extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'क्या आप वाकई इस रूम को छोड़ना चाहते हैं?';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'क्या आप इस रूम में जाना चाहते हैं?';
 }

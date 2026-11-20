@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sk_live/core/widgets/app_network_image.dart';
 
 class RoomGamesSheet extends StatelessWidget {
@@ -112,7 +111,7 @@ class RoomGamesSheet extends StatelessWidget {
                 const SizedBox(height: 14),
                 Text(
                   'Games',
-                  style: GoogleFonts.poppins(
+                  style: TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -121,7 +120,7 @@ class RoomGamesSheet extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   'Pick a game to play',
-                  style: GoogleFonts.poppins(
+                  style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -150,7 +149,7 @@ class RoomGamesSheet extends StatelessWidget {
                                 children: [
                                   Text(
                                     section.title,
-                                    style: GoogleFonts.poppins(
+                                    style: TextStyle(
                                       color: Colors.white.withValues(
                                         alpha: 0.85,
                                       ),
@@ -267,7 +266,7 @@ class _GameTile extends StatelessWidget {
                 width: double.infinity,
                 child: _SlowMarqueeText(
                   text: name,
-                  style: GoogleFonts.poppins(
+                  style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.9),
                     fontSize: 11,
                     fontWeight: FontWeight.w600,

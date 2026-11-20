@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/util/error_handler.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 class FamilyModel {
   final String id;
@@ -57,7 +58,7 @@ final familyCreationCostProvider = FutureProvider<int>((ref) async {
         .single();
     return int.parse(response['value'] ?? '200000');
   } catch (e) {
-    print('--- [DEBUG] Error fetching cost, using default 200k: $e ---');
+    devLog('--- [DEBUG] Error fetching cost, using default 200k: $e ---');
     return 200000;
   }
 });
@@ -66,7 +67,7 @@ final topFamiliesProvider = FutureProvider<List<FamilyModel>>((ref) async {
   final supabase = Supabase.instance.client;
 
   try {
-    print('--- [DEBUG] Fetching Families from Supabase ---');
+    devLog('--- [DEBUG] Fetching Families from Supabase ---');
 
     final rawResponse = await supabase
         .from('families')
@@ -74,12 +75,12 @@ final topFamiliesProvider = FutureProvider<List<FamilyModel>>((ref) async {
         .order('total_exp', ascending: false)
         .limit(10);
 
-    print('--- [DEBUG] Raw Supabase Response: $rawResponse ---');
+    devLog('--- [DEBUG] Raw Supabase Response: $rawResponse ---');
     return (rawResponse as List)
         .map((json) => FamilyModel.fromJson(json))
         .toList();
   } catch (e) {
-    print('!!! [DEBUG] Supabase Fetch Error: $e !!!');
+    devLog('!!! [DEBUG] Supabase Fetch Error: $e !!!');
     rethrow;
   }
 });
@@ -95,7 +96,7 @@ final allFamiliesProvider = FutureProvider<List<FamilyModel>>((ref) async {
         .map((json) => FamilyModel.fromJson(json))
         .toList();
   } catch (e) {
-    print('Error fetching all families: $e');
+    devLog('Error fetching all families: $e');
     return [];
   }
 });
@@ -107,18 +108,18 @@ final userFamilyProvider = FutureProvider<FamilyModel?>((ref) async {
   final userProfile = userProfileAsync.value;
 
   if (userProfile == null) {
-    print('--- [DEBUG] userFamilyProvider: No user profile loaded yet ---');
+    devLog('--- [DEBUG] userFamilyProvider: No user profile loaded yet ---');
     return null;
   }
 
   final familyId = userProfile['family_id'];
   if (familyId == null) {
-    print('--- [DEBUG] userFamilyProvider: user has no family_id ---');
+    devLog('--- [DEBUG] userFamilyProvider: user has no family_id ---');
     return null;
   }
 
   try {
-    print(
+    devLog(
       '--- [DEBUG] userFamilyProvider: Fetching family for ID $familyId ---',
     );
     final response = await supabase
@@ -127,20 +128,20 @@ final userFamilyProvider = FutureProvider<FamilyModel?>((ref) async {
         .eq('id', familyId)
         .maybeSingle();
 
-    print('--- [DEBUG] userFamilyProvider Response: $response ---');
+    devLog('--- [DEBUG] userFamilyProvider Response: $response ---');
 
     if (response == null) {
-      print('--- [DEBUG] userFamilyProvider: Family not found in DB ---');
+      devLog('--- [DEBUG] userFamilyProvider: Family not found in DB ---');
       return null;
     }
 
     final family = FamilyModel.fromJson(response);
-    print(
+    devLog(
       '--- [DEBUG] userFamilyProvider: Found family ${family.name}, level ${family.level} ---',
     );
     return family;
   } catch (e) {
-    print('--- [DEBUG] Error fetching user family: $e ---');
+    devLog('--- [DEBUG] Error fetching user family: $e ---');
     return null;
   }
 });
@@ -159,7 +160,7 @@ final familyDetailProvider = FutureProvider.family<FamilyModel?, String>((
     if (response == null) return null;
     return FamilyModel.fromJson(response);
   } catch (e) {
-    print('Error fetching family detail: $e');
+    devLog('Error fetching family detail: $e');
     return null;
   }
 });
@@ -180,7 +181,7 @@ final userFamilyRoleProvider = FutureProvider<String?>((ref) async {
         .maybeSingle();
     return response?['role'] as String?;
   } catch (e) {
-    print('Error fetching user family role: $e');
+    devLog('Error fetching user family role: $e');
     return null;
   }
 });
@@ -200,7 +201,7 @@ final familyJoinRequestsProvider =
             .order('created_at', ascending: false);
         return List<Map<String, dynamic>>.from(response);
       } catch (e) {
-        print('Error fetching join requests: $e');
+        devLog('Error fetching join requests: $e');
         return [];
       }
     });
@@ -221,7 +222,7 @@ final familyMembersProvider =
             .order('role');
         return List<Map<String, dynamic>>.from(response);
       } catch (e) {
-        print('Error fetching family members: $e');
+        devLog('Error fetching family members: $e');
         return [];
       }
     });
@@ -237,7 +238,7 @@ final familyLevelConfigsProvider = FutureProvider<List<Map<String, dynamic>>>((
         .order('level', ascending: true);
     return List<Map<String, dynamic>>.from(response);
   } catch (e) {
-    print('Error fetching family level configs: $e');
+    devLog('Error fetching family level configs: $e');
     return [];
   }
 });

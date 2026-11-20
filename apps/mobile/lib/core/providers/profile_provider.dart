@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sk_live/core/providers/seat_wear_cache.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/providers/provider_cache.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
@@ -698,13 +699,15 @@ Future<List<UserBadgeModel>> fetchUserBadges(
 
           var totalExp = 0;
           if (ownerId.isNotEmpty) {
-            final earnings = await supabase
-                .from('earning_logs')
-                .select('agency_amount')
-                .eq('agency_owner_id', ownerId);
-            for (final row in earnings as List) {
-              totalExp += (row['agency_amount'] as num?)?.toInt() ?? 0;
-            }
+            // Summed server-side. This used to select every earning_logs row
+            // for the owner and add them up here — a full scan of a 2.4M-row,
+            // 431 MB table that returned up to 420k rows to the device and
+            // timed out (57014) on the larger agencies.
+            final total = await supabase.rpc(
+              'agency_total_exp',
+              params: <String, dynamic>{'p_owner_id': ownerId},
+            );
+            totalExp = (total as num?)?.toInt() ?? 0;
           }
           if (agencyId.isNotEmpty) {
             final ranking = await supabase
@@ -804,32 +807,17 @@ final userBadgesProvider = FutureProvider.autoDispose
     .family<List<UserBadgeModel>, String>((ref, userId) async {
       cacheFamilyEntry(ref);
       try {
+        final known = SeatWearCache.badgesNow(userId);
+        if (known != null) {
+          return known.map(UserBadgeModel.fromJson).toList();
+        }
         final cachedMaps = HiveCacheService.loadBadges(userId);
         if (cachedMaps != null) {
-          final cached = cachedMaps.map(UserBadgeModel.fromJson).toList();
-          Future(() async {
-            try {
-              final remote = await fetchUserBadges(ref.watch, userId);
-              final changed = await HiveCacheService.saveBadges(
-                userId,
-                remote.map((b) => b.toJson()).toList(),
-              );
-              if (changed) {
-                ref.invalidateSelf();
-              }
-            } catch (e) {
-              debugPrint('[userBadgesProvider] bg refresh failed: $e');
-            }
-          });
-          return cached;
+          SeatWearCache.rememberBadges(userId, cachedMaps);
+          return cachedMaps.map(UserBadgeModel.fromJson).toList();
         }
-
-        final remote = await fetchUserBadges(ref.watch, userId);
-        await HiveCacheService.saveBadges(
-          userId,
-          remote.map((b) => b.toJson()).toList(),
-        );
-        return remote;
+        final remote = await SeatWearCache.badgesFor(userId);
+        return remote.map(UserBadgeModel.fromJson).toList();
       } catch (e) {
         debugPrint('Error in userBadgesProvider: $e');
         return [];
@@ -895,33 +883,11 @@ Future<Map<String, String?>?> fetchUserEquippedFrame(String userId) async {
 final userEquippedFrameProvider = FutureProvider.autoDispose
     .family<Map<String, String?>?, String>((ref, userId) async {
       cacheFamilyEntry(ref);
+      final known = SeatWearCache.frameNow(userId);
+      if (known.known) return known.frame;
       final cached = HiveCacheService.loadEquippedFrame(userId);
       if (cached != null) {
-        Future(() async {
-          try {
-            final before = HiveCacheService.loadEquipped(
-              userId,
-            )?['fingerprint'];
-            final remote = await fetchUserEquippedFrame(userId);
-            await HiveCacheService.patchEquippedFrame(userId, remote);
-            final after = HiveCacheService.loadEquipped(userId)?['fingerprint'];
-            if (before != after) {
-              ref.invalidateSelf();
-            }
-          } catch (e) {
-            debugPrint('[userEquippedFrameProvider] bg refresh failed: $e');
-          }
-        });
-        final image = cached['image_url']?.trim();
-        final svga = cached['svga_url']?.trim();
-        if ((image == null || image.isEmpty) &&
-            (svga == null || svga.isEmpty)) {
-          return null;
-        }
-        return cached;
+        return SeatWearCache.rememberHiveFrame(userId, cached);
       }
-
-      final remote = await fetchUserEquippedFrame(userId);
-      await HiveCacheService.patchEquippedFrame(userId, remote);
-      return remote;
+      return SeatWearCache.frameFor(userId);
     });

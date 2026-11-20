@@ -217,20 +217,71 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
+                  // Two unlabelled pictures read as anything but a gender
+                  // choice — people took them for an invite code and got
+                  // stuck. Say what the choice is, and name each option.
+                  Text(
+                    l10n.auth_selectGender,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _AvatarOption(
-                        asset: _boyAvatar,
-                        isSelected: _selectedGender == 'male',
-                        onTap: () => setState(() => _selectedGender = 'male'),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _AvatarOption(
+                            asset: _boyAvatar,
+                            isSelected: _selectedGender == 'male',
+                            onTap: () =>
+                                setState(() => _selectedGender = 'male'),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            l10n.auth_genderMale,
+                            style: TextStyle(
+                              color: _selectedGender == 'male'
+                                  ? AppColors.primary
+                                  : AppColors.textSecondary,
+                              fontSize: 13,
+                              fontWeight: _selectedGender == 'male'
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(width: 28),
-                      _AvatarOption(
-                        asset: _girlAvatar,
-                        isSelected: _selectedGender == 'female',
-                        onTap: () => setState(() => _selectedGender = 'female'),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _AvatarOption(
+                            asset: _girlAvatar,
+                            isSelected: _selectedGender == 'female',
+                            onTap: () =>
+                                setState(() => _selectedGender = 'female'),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            l10n.auth_genderFemale,
+                            style: TextStyle(
+                              color: _selectedGender == 'female'
+                                  ? AppColors.primary
+                                  : AppColors.textSecondary,
+                              fontSize: 13,
+                              fontWeight: _selectedGender == 'female'
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

@@ -233,6 +233,9 @@ class AppLocalizationsVi extends AppLocalizations {
   String get profile_resellerPanel => 'Bảng điều khiển đại lý';
 
   @override
+  String get profile_merchantPanel => 'Bảng điều khiển thương gia';
+
+  @override
   String get profile_accountManagement => 'Quản lý tài khoản';
 
   @override
@@ -298,6 +301,15 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'Hoàn thiện hồ sơ của bạn';
+
+  @override
+  String get auth_selectGender => 'Chọn giới tính';
+
+  @override
+  String get auth_genderMale => 'Nam';
+
+  @override
+  String get auth_genderFemale => 'Nữ';
 
   @override
   String get auth_nickname => 'Biệt hiệu';
@@ -621,6 +633,30 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'Phòng';
+
+  @override
+  String get party_tabEvent => 'Sự kiện';
+
+  @override
+  String get profile_coin => 'Xu';
+
+  @override
+  String get home_selectCountry => 'Chọn quốc gia';
+
+  @override
+  String get home_regionMiddleEast => 'Trung Đông';
+
+  @override
+  String get home_regionAsia => 'Châu Á';
+
+  @override
+  String get home_regionAmerica => 'Châu Mỹ';
+
+  @override
+  String get home_regionEurope => 'Châu Âu';
+
+  @override
+  String get home_regionAfrica => 'Châu Phi';
 
   @override
   String get party_tooltipRanking => 'Xếp hạng';
@@ -1625,4 +1661,11 @@ class AppLocalizationsVi extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'Bạn có chắc chắn muốn rời khỏi phòng này không?';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'Bạn có muốn vào phòng này không?';
 }

@@ -1,5 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/l10n/l10n_ext.dart';
+import 'package:sk_live/features/auth/presentation/widgets/my_profile/my_profile_menu_card.dart';
+
+class MyProfileGridItem {
+  const MyProfileGridItem({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    required this.colors,
+    this.asset,
+  });
+
+  final String label;
+  final IconData icon;
+
+  final String? asset;
+  final VoidCallback onTap;
+
+  /// Two-stop gradient for the icon badge, light stop first.
+  ///
+  /// The built-in features are colourful illustrations. These entries arrived
+  /// from a tap-through list where a small dark glyph is correct — dropped into
+  /// the same grid they read as unfinished next to the artwork. A gradient
+  /// badge per entry puts them on equal footing without needing new artwork.
+  final List<Color> colors;
+}
 
 class MyProfileFeaturesCard extends StatelessWidget {
   const MyProfileFeaturesCard({
@@ -17,17 +42,20 @@ class MyProfileFeaturesCard extends StatelessWidget {
     this.onWeeklyRoomReward,
     this.showWeeklyRoomReward = false,
     this.onMicReward,
+    this.extraItems = const <MyProfileGridItem>[],
   });
 
-  static const _walletAsset = 'assets/profile/wallet.webp';
-  static const _storeAsset = 'assets/profile/store.webp';
-  static const _vipAsset = 'assets/profile/vip.webp';
-  static const _decorationAsset = 'assets/profile/decoration.webp';
-  static const _agencyAsset = 'assets/profile/agency.webp';
-  static const _eventsAsset = 'assets/profile/events.webp';
-  static const _hostCenterAsset = 'assets/profile/host_center.webp';
-  static const _weeklyRoomRewardAsset = 'assets/profile/room_reward.webp';
-  static const _micRewardAsset = 'assets/profile/mic_reward.webp';
+  static const _walletAsset = 'assets/design/me/icons/icon_wallet.webp';
+  static const _storeAsset = 'assets/design/me/icons/icon_store.webp';
+  static const _vipAsset = 'assets/design/me/icons/icon_vip.webp';
+  static const _decorationAsset = 'assets/design/me/icons/icon_decoration.webp';
+  static const _agencyAsset = 'assets/design/me/icons/icon_agency.webp';
+  static const _eventsAsset = 'assets/design/me/icons/icon_events.webp';
+  static const _hostCenterAsset =
+      'assets/design/me/icons/icon_host_center.webp';
+  static const _weeklyRoomRewardAsset =
+      'assets/design/me/icons/icon_room_reward.webp';
+  static const _micRewardAsset = 'assets/design/me/icons/icon_mic_reward.webp';
 
   final int vipLevel;
   final VoidCallback onJoinVip;
@@ -43,16 +71,28 @@ class MyProfileFeaturesCard extends StatelessWidget {
   final bool showWeeklyRoomReward;
   final VoidCallback? onMicReward;
 
+  /// Appended after the built-in features, in the order given.
+  final List<MyProfileGridItem> extraItems;
+
+  static const bool showVipBanner = false;
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _VipBanner(vipLevel: vipLevel, onJoinVip: onJoinVip),
-        const SizedBox(height: 8),
+        if (showVipBanner) ...[
+          Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: 30 * MediaQuery.sizeOf(context).width / 750,
+            ),
+            child: _VipBanner(vipLevel: vipLevel, onJoinVip: onJoinVip),
+          ),
+          SizedBox(height: 24 * MediaQuery.sizeOf(context).width / 750),
+        ],
         _FeatureGrid(
           showHostCenter: showHostCenter,
-          showWeeklyRoomReward: showWeeklyRoomReward,
+          showWeeklyRoomReward: false,
           onStore: onStore,
           onVip: onVip,
           onDecoration: onDecoration,
@@ -71,10 +111,33 @@ class MyProfileFeaturesCard extends StatelessWidget {
           hostCenterAsset: _hostCenterAsset,
           weeklyRoomRewardAsset: _weeklyRoomRewardAsset,
           micRewardAsset: _micRewardAsset,
+          extraItems: const <MyProfileGridItem>[],
         ),
+        if (listItems(context).isNotEmpty) ...[
+          SizedBox(height: 29 * MediaQuery.sizeOf(context).width / 750),
+          MyProfileMenuCard(items: listItems(context)),
+        ],
       ],
     );
   }
+
+  List<MyProfileMenuItem> listItems(BuildContext context) => [
+    if (showWeeklyRoomReward && onWeeklyRoomReward != null)
+      MyProfileMenuItem(
+        icon: Icons.card_giftcard_rounded,
+        asset: _weeklyRoomRewardAsset,
+        label: context.l10n.profile_roomReward,
+        onTap: onWeeklyRoomReward!,
+      ),
+    for (final extra in extraItems)
+      MyProfileMenuItem(
+        icon: extra.icon,
+        asset: extra.asset,
+        label: extra.label,
+        colors: extra.colors,
+        onTap: extra.onTap,
+      ),
+  ];
 }
 
 class _VipBanner extends StatelessWidget {
@@ -217,6 +280,7 @@ class _FeatureGrid extends StatelessWidget {
     required this.hostCenterAsset,
     required this.weeklyRoomRewardAsset,
     required this.micRewardAsset,
+    required this.extraItems,
   });
 
   final bool showHostCenter;
@@ -239,6 +303,7 @@ class _FeatureGrid extends StatelessWidget {
   final String hostCenterAsset;
   final String weeklyRoomRewardAsset;
   final String micRewardAsset;
+  final List<MyProfileGridItem> extraItems;
 
   @override
   Widget build(BuildContext context) {
@@ -277,49 +342,103 @@ class _FeatureGrid extends StatelessWidget {
           asset: weeklyRoomRewardAsset,
           onTap: onWeeklyRoomReward!,
         ),
+      _GridItemData(
+        label: l10n.profile_agency,
+        asset: agencyAsset,
+        onTap: onAgency,
+      ),
       if (onMicReward != null)
         _GridItemData(
           label: l10n.profile_micReward,
           asset: micRewardAsset,
           onTap: onMicReward!,
         ),
-      _GridItemData(
-        label: l10n.profile_agency,
-        asset: agencyAsset,
-        onTap: onAgency,
-      ),
+      for (final extra in extraItems)
+        _GridItemData(
+          label: extra.label,
+          asset: extra.asset,
+          icon: extra.icon,
+          onTap: extra.onTap,
+          colors: extra.colors,
+        ),
     ];
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: items.length,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 4,
-          mainAxisSpacing: 4,
-          crossAxisSpacing: 4,
-          childAspectRatio: 0.92,
+    final s = MediaQuery.sizeOf(context).width / 750;
+    final rows = (items.length / 4).ceil();
+    final panelHeight = (_panelTop + rows * _rowPitch + _panelBottomPad) * s;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 29 * s),
+      child: SizedBox(
+        height: panelHeight,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Column(
+                children: [
+                  Image.asset(
+                    _panelTopAsset,
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    gaplessPlayback: true,
+                  ),
+                  Expanded(
+                    child: Image.asset(
+                      _panelMidAsset,
+                      width: double.infinity,
+                      fit: BoxFit.fill,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                  Image.asset(
+                    _panelBottomAsset,
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    gaplessPlayback: true,
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              left: 12.5 * s,
+              right: 12.5 * s,
+              top: _panelTop * s,
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final cell = c.maxWidth / 4;
+                  return Column(
+                    children: [
+                      for (var r = 0; r < rows; r++)
+                        Row(
+                          children: [
+                            for (var i = r * 4; i < r * 4 + 4; i++)
+                              SizedBox(
+                                width: cell,
+                                height: _rowPitch * s,
+                                child: i < items.length
+                                    ? _GridTile(item: items[i], scale: s)
+                                    : null,
+                              ),
+                          ],
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return _GridTile(item: item);
-        },
       ),
     );
   }
+
+  static const _panelTopAsset = 'assets/design/me/panel_top.webp';
+  static const _panelMidAsset = 'assets/design/me/panel_mid.webp';
+  static const _panelBottomAsset = 'assets/design/me/panel_bottom.webp';
+
+  static const double _panelTop = 26;
+  static const double _rowPitch = 165;
+  static const double _panelBottomPad = 1;
 }
 
 class _GridItemData {
@@ -328,42 +447,69 @@ class _GridItemData {
     required this.onTap,
     this.asset,
     this.icon,
+    this.colors,
   });
 
   final String label;
   final VoidCallback onTap;
   final String? asset;
   final IconData? icon;
+  final List<Color>? colors;
 }
 
 class _GridTile extends StatelessWidget {
-  const _GridTile({required this.item});
+  const _GridTile({required this.item, required this.scale});
 
   final _GridItemData item;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final s = scale;
+    return GestureDetector(
       onTap: item.onTap,
-      borderRadius: BorderRadius.circular(12),
+      behavior: HitTestBehavior.opaque,
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          const SizedBox(height: 2),
-          if (item.asset != null)
-            Image.asset(item.asset!, width: 42, height: 42, fit: BoxFit.contain)
-          else
-            Icon(item.icon, size: 34, color: const Color(0xFF1A1A2E)),
-          const SizedBox(height: 4),
-          Text(
-            item.label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF4A4A5E),
+          SizedBox(
+            width: 100 * s,
+            height: 100 * s,
+            child: item.asset != null
+                ? Image.asset(
+                    item.asset!,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                  )
+                : Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24 * s),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors:
+                            item.colors ??
+                            const [Color(0xFFB79BFF), Color(0xFF6435C9)],
+                      ),
+                    ),
+                    child: Icon(item.icon, size: 52 * s, color: Colors.white),
+                  ),
+          ),
+          SizedBox(height: 12.5 * s),
+          SizedBox(
+            width: 140 * s,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                item.label,
+                maxLines: 1,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 28 * s,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                  height: 1.2,
+                ),
+              ),
             ),
           ),
         ],

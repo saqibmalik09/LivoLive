@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -55,36 +57,25 @@ final authStateProvider = StreamProvider<AuthState>((ref) async* {
 });
 
 Future<Session?> _tryRecoverSession(AuthService auth) async {
-  const delays = [
-    Duration(milliseconds: 400),
-    Duration(milliseconds: 900),
-    Duration(milliseconds: 1600),
-  ];
+  // One immediate read. Sleeping 400+900+1600ms here used to run while the
+  // router refused to leave `/`.
+  try {
+    if (auth.currentSession != null) return auth.currentSession;
 
-  for (var i = 0; i < delays.length; i++) {
-    await Future<void>.delayed(delays[i]);
-
-    try {
-      if (auth.currentSession != null) {
-        return auth.currentSession;
-      }
-
-      final storage = SecureSupabaseLocalStorage.instance;
-      final json =
-          await storage?.readSessionBackup() ?? await storage?.accessToken();
-      if (json == null || json.isEmpty) {
-        debugPrint('[Auth] recover attempt ${i + 1}: no backup session');
-        continue;
-      }
-
-      final response = await Supabase.instance.client.auth.recoverSession(json);
-      final session = response.session ?? auth.currentSession;
-      if (session != null) return session;
-    } catch (e) {
-      debugPrint('[Auth] recover attempt ${i + 1} failed: $e');
+    final storage = SecureSupabaseLocalStorage.instance;
+    final json =
+        await storage?.readSessionBackup() ?? await storage?.accessToken();
+    if (json == null || json.isEmpty) {
+      debugPrint('[Auth] recover: no backup session');
+      return null;
     }
+
+    final response = await Supabase.instance.client.auth.recoverSession(json);
+    return response.session ?? auth.currentSession;
+  } catch (e) {
+    debugPrint('[Auth] recover failed: $e');
+    return auth.currentSession;
   }
-  return null;
 }
 
 final authServiceProvider = Provider<AuthService>((ref) {
@@ -102,15 +93,46 @@ final userProfileProvider = StreamProvider<Map<String, dynamic>?>((ref) {
 
   final client = Supabase.instance.client;
 
-  return realtimeWithFallback<Map<String, dynamic>?>(
+  return _userProfileUpdates(client, sessionUserId);
+});
+
+const _profileFetchTimeout = Duration(seconds: 2);
+
+Map<String, dynamic>? _cachedUserProfile(String sessionUserId) {
+  final cachedMedia = HiveCacheService.loadProfileMedia(sessionUserId);
+  final cachedGender = cachedMedia?['gender']?.trim();
+  final cachedCountry = cachedMedia?['country_code']?.trim();
+  if (cachedGender == null ||
+      cachedGender.isEmpty ||
+      cachedCountry == null ||
+      cachedCountry.isEmpty) {
+    return null;
+  }
+  return {
+    'id': sessionUserId,
+    'avatar_url': cachedMedia?['avatar_url'],
+    'banner_url': cachedMedia?['banner_url'],
+    'gender': cachedGender,
+    'country_code': cachedCountry,
+  };
+}
+
+Stream<Map<String, dynamic>?> _userProfileUpdates(
+  SupabaseClient client,
+  String sessionUserId,
+) async* {
+  final cached = _cachedUserProfile(sessionUserId);
+  if (cached != null) yield cached;
+
+  yield* realtimeWithFallback<Map<String, dynamic>?>(
     fetch: () async {
-      final cachedMedia = HiveCacheService.loadProfileMedia(sessionUserId);
       try {
         final row = await client
             .from('users')
             .select()
             .eq('id', sessionUserId)
-            .maybeSingle();
+            .maybeSingle()
+            .timeout(_profileFetchTimeout);
         if (row != null) {
           final profile = Map<String, dynamic>.from(row);
           await HiveCacheService.saveProfileMedia(
@@ -122,25 +144,15 @@ final userProfileProvider = StreamProvider<Map<String, dynamic>?>((ref) {
           );
           return profile;
         }
+        return null;
       } catch (e) {
         debugPrint('[userProfileProvider] fetch failed: $e');
+        final cached = _cachedUserProfile(sessionUserId);
+        if (cached != null) return cached;
+        // No local profile. Let the realtime subscription deliver the row
+        // instead of completing the stream with null.
+        rethrow;
       }
-
-      final cachedGender = cachedMedia?['gender']?.trim();
-      final cachedCountry = cachedMedia?['country_code']?.trim();
-      if (cachedGender != null &&
-          cachedGender.isNotEmpty &&
-          cachedCountry != null &&
-          cachedCountry.isNotEmpty) {
-        return {
-          'id': sessionUserId,
-          'avatar_url': cachedMedia?['avatar_url'],
-          'banner_url': cachedMedia?['banner_url'],
-          'gender': cachedGender,
-          'country_code': cachedCountry,
-        };
-      }
-      return null;
     },
     realtime: () async* {
       Map<String, dynamic>? last;
@@ -165,7 +177,7 @@ final userProfileProvider = StreamProvider<Map<String, dynamic>?>((ref) {
       }
     },
   );
-});
+}
 
 final authControllerProvider =
     StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {

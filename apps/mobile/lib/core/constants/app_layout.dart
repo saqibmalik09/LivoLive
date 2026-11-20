@@ -6,10 +6,13 @@ const double kBottomNavTopFadeHeight = 36;
 
 const double kBottomNavIconFloat = 12;
 
+const double kRefNavBarAspect = 254 / 750;
+
+double refNavBarHeight(BuildContext context) =>
+    MediaQuery.sizeOf(context).width * kRefNavBarAspect;
+
 double bottomNavTotalHeight(BuildContext context) =>
-    MediaQuery.paddingOf(context).bottom +
-    kAppBottomNavBarHeight +
-    kBottomNavIconFloat;
+    MediaQuery.paddingOf(context).bottom + refNavBarHeight(context);
 
 const double kHomeTabScrollBottomGap = 8;
 

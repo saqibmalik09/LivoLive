@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sk_live/core/l10n/l10n_ext.dart';
+import 'package:sk_live/core/providers/bottom_nav_config_provider.dart';
 import 'package:sk_live/core/providers/discovery_rooms_for_grid_provider.dart';
-import 'package:sk_live/core/providers/home_rooms_pagination_provider.dart';
+import 'package:sk_live/core/providers/navigation_provider.dart';
+import 'package:sk_live/core/widgets/ref_pag_loop.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/core/widgets/app_network_image.dart';
 import 'package:sk_live/features/home/services/room_lock_service.dart';
@@ -30,110 +32,67 @@ class HomeRoomTop3CardsSection extends ConsumerWidget {
   const HomeRoomTop3CardsSection({super.key});
 
   static const double sectionHeight = 248;
-  static const double _framePad = 8;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final roomsState = ref.watch(discoveryRoomsPaginationProvider);
-    final topRooms = ref.watch(discoveryTop3RoomsProvider);
+    final ranked = ref.watch(homeTop3RankedRoomsProvider);
+    final top1 = ranked[0];
+    final top2 = ranked[1];
+    final top3 = ranked[2];
 
-    if (roomsState.isLoading && topRooms.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.zero,
-        child: SizedBox(height: sectionHeight, child: _PlaceholderBlock()),
-      );
-    }
-
-    Map<String, dynamic>? at(int rank) {
-      if (topRooms.length < rank) return null;
-      return topRooms[rank - 1];
-    }
-
-    final top1 = at(1);
-    final top2 = at(2);
-    final top3 = at(3);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-      child: SizedBox(
-        height: sectionHeight,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              flex: 13,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  2,
-                  _framePad,
-                  _framePad,
-                  _framePad,
-                ),
-                child: PartyRoomRankCard(
-                  room: top1,
-                  rank: 1,
-                  frameAsset: HomePartyRoomFrames.rank1,
-                  onTap: () => _openRoom(context, topRooms, 0),
-                ),
-              ),
-            ),
-            Expanded(
-              flex: 7,
-              child: Column(
-                children: [
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        0,
-                        _framePad,
-                        2,
-                        _framePad / 2,
-                      ),
-                      child: PartyRoomRankCard(
-                        room: top2,
-                        rank: 2,
-                        frameAsset: HomePartyRoomFrames.rank2,
-                        onTap: () => _openRoom(context, topRooms, 1),
-                      ),
-                    ),
+    final isHomeTab =
+        ref.watch(bottomNavIndexProvider) == bottomNavIndexForKey('home');
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final s = constraints.maxWidth / RefTop3Layout.designWidth;
+        return SizedBox(
+          height: RefTop3Layout.sectionHeight * s,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              const Positioned.fill(child: RefSkyBackdrop(windowTop: 0)),
+              for (final slot in RefTop3Layout.slots)
+                Positioned(
+                  left: slot.left * s,
+                  top: slot.top * s,
+                  width: slot.width * s,
+                  height: slot.height * s,
+                  child: _RefTop3Slot(
+                    slot: slot,
+                    room: switch (slot.rank) {
+                      1 => top1,
+                      2 => top2,
+                      _ => top3,
+                    },
+                    animate: isHomeTab,
+                    onTap: () => _openRoom(context, switch (slot.rank) {
+                      1 => top1,
+                      2 => top2,
+                      _ => top3,
+                    }),
                   ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        0,
-                        _framePad / 2,
-                        2,
-                        _framePad,
-                      ),
-                      child: PartyRoomRankCard(
-                        room: top3,
-                        rank: 3,
-                        frameAsset: HomePartyRoomFrames.rank3,
-                        onTap: () => _openRoom(context, topRooms, 2),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
+  // Takes the room that is actually drawn on the card. Indexing back into the
+  // unfiltered list opened the wrong room once a pinned room displaced the
+  // automatic ordering.
   Future<void> _openRoom(
     BuildContext context,
-    List<Map<String, dynamic>> topRooms,
-    int index,
+    Map<String, dynamic>? displayed,
   ) async {
-    if (index < 0 || index >= topRooms.length) {
+    if (displayed == null) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(context.l10n.home_noRankedRoom)));
       return;
     }
-    final room = Map<String, dynamic>.from(topRooms[index]);
+    final room = Map<String, dynamic>.from(displayed);
     final id = room['id']?.toString() ?? '';
     if (id.isEmpty) {
       ScaffoldMessenger.of(
@@ -155,6 +114,213 @@ class HomeRoomTop3CardsSection extends ConsumerWidget {
 
 class HomeHotCardsSection extends HomeRoomTop3CardsSection {
   const HomeHotCardsSection({super.key});
+}
+
+abstract final class RefTop3Layout {
+  static const double designWidth = 750;
+
+  static const double sectionHeight = 268;
+
+  static const String cloudsAsset = 'assets/design/home/bg_sky_clouds.webp';
+  static const String pedestalsAsset = 'assets/design/home/bg_pedestals_3.webp';
+
+  static const double cloudsTop = -72;
+  static const double cloudsHeight = 400;
+
+  static const double pedestalsTop = 185;
+  static const double pedestalsHeight = 146;
+
+  static const double pagFrameWidthFix = 1 / 0.84;
+
+  static const List<RefTop3Slot> slots = [
+    RefTop3Slot(
+      rank: 2,
+      asset: 'assets/design/home/top2_room.pag',
+      left: 43,
+      top: 26,
+      width: 184.5,
+      height: 208.7,
+      hole: (left: 0.135, top: 0.19, right: 0.128, bottom: 0.138),
+    ),
+    RefTop3Slot(
+      rank: 1,
+      asset: 'assets/design/home/top1_room.pag',
+      left: 275.5,
+      top: 11,
+      width: 199,
+      height: 227,
+      hole: (left: 0.12, top: 0.19, right: 0.115, bottom: 0.143),
+    ),
+    RefTop3Slot(
+      rank: 3,
+      asset: 'assets/design/home/top3_room.pag',
+      left: 523,
+      top: 26,
+      width: 183.5,
+      height: 206.7,
+      hole: (left: 0.136, top: 0.19, right: 0.125, bottom: 0.135),
+    ),
+  ];
+}
+
+class RefSkyBackdrop extends StatelessWidget {
+  const RefSkyBackdrop({super.key, this.windowTop = 0, this.windowBottom});
+
+  final double windowTop;
+
+  final double? windowBottom;
+
+  static const List<double> _cloudFade = [0, 72 / 400, 340 / 400, 1];
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final s = constraints.maxWidth / RefTop3Layout.designWidth;
+        final windowTop = windowBottom == null
+            ? this.windowTop
+            : windowBottom! - constraints.maxHeight / s;
+        return ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                top: (RefTop3Layout.cloudsTop - windowTop) * s,
+                left: 0,
+                right: 0,
+                height: RefTop3Layout.cloudsHeight * s,
+                child: ShaderMask(
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (rect) => const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: _cloudFade,
+                    colors: [
+                      Color(0x00000000),
+                      Color(0xFF000000),
+                      Color(0xFF000000),
+                      Color(0x00000000),
+                    ],
+                  ).createShader(rect),
+                  child: Image.asset(
+                    RefTop3Layout.cloudsAsset,
+                    fit: BoxFit.fill,
+                    filterQuality: FilterQuality.medium,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: (RefTop3Layout.pedestalsTop - windowTop) * s,
+                left: 0,
+                right: 0,
+                height: RefTop3Layout.pedestalsHeight * s,
+                child: Image.asset(
+                  RefTop3Layout.pedestalsAsset,
+                  fit: BoxFit.fill,
+                  filterQuality: FilterQuality.medium,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class RefTop3Slot {
+  const RefTop3Slot({
+    required this.rank,
+    required this.asset,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.hole,
+  });
+
+  final int rank;
+  final String asset;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final ({double left, double top, double right, double bottom}) hole;
+}
+
+class _RefTop3Slot extends StatelessWidget {
+  const _RefTop3Slot({
+    required this.slot,
+    required this.room,
+    required this.animate,
+    required this.onTap,
+  });
+
+  final RefTop3Slot slot;
+  final Map<String, dynamic>? room;
+  final bool animate;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cover = room?['image_url']?.toString().trim() ?? '';
+
+    return GestureDetector(
+      onTap: onTap,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+          return Stack(
+            clipBehavior: Clip.none,
+            fit: StackFit.expand,
+            children: [
+              Positioned(
+                left: w * slot.hole.left,
+                top: h * slot.hole.top,
+                right: w * slot.hole.right,
+                bottom: h * slot.hole.bottom,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: cover.isNotEmpty
+                      ? AppNetworkImage(
+                          imageUrl: cover,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.topCenter,
+                          fadeInDuration: Duration.zero,
+                          fadeOutDuration: Duration.zero,
+                          transformWidth: 400,
+                          transformHeight: 400,
+                          memCacheWidth: 400,
+                          memCacheHeight: 400,
+                          placeholder: (_, _) => const _PlaceholderBlock(),
+                          errorWidget: (_, _, _) => const _PlaceholderBlock(),
+                        )
+                      : const _PlaceholderBlock(),
+                ),
+              ),
+              Positioned(
+                left: -w * (RefTop3Layout.pagFrameWidthFix - 1) / 2,
+                right: -w * (RefTop3Layout.pagFrameWidthFix - 1) / 2,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: RefPagLoop(
+                    asset: slot.asset,
+                    width: w * RefTop3Layout.pagFrameWidthFix,
+                    height: h,
+                    active: animate,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class PartyRoomRankCard extends StatelessWidget {

@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/util/room_cover_cache.dart';
 
 class AppNetworkImage extends StatelessWidget {
   const AppNetworkImage({
@@ -24,6 +25,7 @@ class AppNetworkImage extends StatelessWidget {
     this.progressIndicatorBuilder,
     this.errorWidget,
     this.cacheKey,
+    this.gaplessPlayback = false,
     this.enableTransform = true,
     this.transformWidth = 600,
     this.transformHeight,
@@ -52,6 +54,13 @@ class AppNetworkImage extends StatelessWidget {
 
   final String? cacheKey;
 
+  /// Keeps the decoded frame when this image is rebuilt.
+  ///
+  /// This cached_network_image version has no gaplessPlayback argument; it
+  /// maps the flag to [CachedNetworkImage.useOldImageOnUrlChange]. When the
+  /// bitmap is already in the memory cache, the placeholder is skipped.
+  final bool gaplessPlayback;
+
   final bool enableTransform;
 
   final int transformWidth;
@@ -77,6 +86,54 @@ class AppNetworkImage extends StatelessWidget {
               ) ??
               rewritten)
         : rewritten;
+
+    if (gaplessPlayback) {
+      final provider = _decodedProvider(
+        transformed,
+        cacheKey: cacheKey,
+        memCacheWidth: memCacheWidth,
+        memCacheHeight: memCacheHeight,
+        maxWidthDiskCache: maxWidthDiskCache,
+        maxHeightDiskCache: maxHeightDiskCache,
+      );
+      return Image(
+        image: provider,
+        fit: fit,
+        width: width,
+        height: height,
+        alignment: alignment,
+        color: color,
+        colorBlendMode: colorBlendMode,
+        filterQuality: filterQuality,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) {
+          if (transformed != rewritten) {
+            return CachedNetworkImage(
+              imageUrl: rewritten,
+              fit: fit,
+              width: width,
+              height: height,
+              alignment: alignment,
+              color: color,
+              colorBlendMode: colorBlendMode,
+              filterQuality: filterQuality,
+              memCacheWidth: memCacheWidth,
+              memCacheHeight: memCacheHeight,
+              maxWidthDiskCache: maxWidthDiskCache,
+              maxHeightDiskCache: maxHeightDiskCache,
+              fadeInDuration: Duration.zero,
+              fadeOutDuration: Duration.zero,
+              useOldImageOnUrlChange: true,
+              placeholder: placeholder,
+              progressIndicatorBuilder: progressIndicatorBuilder,
+              errorWidget: errorWidget ?? (c, u, e) => const SizedBox.shrink(),
+            );
+          }
+          return errorWidget?.call(context, transformed, error) ??
+              const SizedBox.shrink();
+        },
+      );
+    }
 
     Widget Function(BuildContext, String, dynamic)? onError = errorWidget;
     if (transformed != rewritten) {
@@ -123,6 +180,76 @@ class AppNetworkImage extends StatelessWidget {
       progressIndicatorBuilder: progressIndicatorBuilder,
       errorWidget: onError,
     );
+  }
+}
+
+/// One discovery page (24) plus the next page (16), with a little slack.
+/// Holding listeners stops cached_network_image from re-decoding a cover
+/// when its cell is recycled, which is the blurry preview on scroll-back.
+const int _roomCoverRetainLimit = 48;
+
+class _RetainedCover {
+  _RetainedCover(this.stream, this.listener);
+
+  final ImageStream stream;
+  final ImageStreamListener listener;
+}
+
+final Map<String, _RetainedCover> _retainedRoomCovers = {};
+
+ImageProvider<Object> _decodedProvider(
+  String url, {
+  String? cacheKey,
+  int? memCacheWidth,
+  int? memCacheHeight,
+  int? maxWidthDiskCache,
+  int? maxHeightDiskCache,
+}) {
+  final ImageProvider<Object> provider = CachedNetworkImageProvider(
+    url,
+    cacheKey: cacheKey,
+    maxWidth: maxWidthDiskCache,
+    maxHeight: maxHeightDiskCache,
+  );
+  if (memCacheWidth == null && memCacheHeight == null) return provider;
+  return ResizeImage(provider, width: memCacheWidth, height: memCacheHeight);
+}
+
+/// Decoded room cover at [cacheWidth]. Same key the discovery card paints.
+ImageProvider<Object> roomCoverImageProvider(String imageUrl, int cacheWidth) {
+  final url = roomCoverCacheKey(imageUrl, cacheWidth);
+  return _decodedProvider(
+    url,
+    cacheKey: url,
+    memCacheWidth: cacheWidth,
+    memCacheHeight: cacheWidth,
+  );
+}
+
+/// Keeps [imageUrl] decoded until newer covers push it out of the window.
+void retainRoomCover(String imageUrl, int cacheWidth) {
+  final trimmed = imageUrl.trim();
+  if (trimmed.isEmpty || cacheWidth <= 0) return;
+  final key = roomCoverCacheKey(trimmed, cacheWidth);
+  final existing = _retainedRoomCovers.remove(key);
+  if (existing != null) {
+    _retainedRoomCovers[key] = existing;
+    return;
+  }
+  final stream = roomCoverImageProvider(
+    trimmed,
+    cacheWidth,
+  ).resolve(const ImageConfiguration());
+  final listener = ImageStreamListener((info, _) {
+    info.dispose();
+  }, onError: (_, _) {});
+  stream.addListener(listener);
+  _retainedRoomCovers[key] = _RetainedCover(stream, listener);
+  while (_retainedRoomCovers.length > _roomCoverRetainLimit) {
+    final oldest = _retainedRoomCovers.keys.first;
+    final removed = _retainedRoomCovers.remove(oldest);
+    if (removed == null) break;
+    removed.stream.removeListener(removed.listener);
   }
 }
 

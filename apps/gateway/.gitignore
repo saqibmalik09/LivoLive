@@ -7,3 +7,4 @@ npm-debug.log*
 dist/
 coverage/
 *.log
+test/.gift_db_baseline.json

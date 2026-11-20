@@ -233,6 +233,9 @@ class AppLocalizationsAr extends AppLocalizations {
   String get profile_resellerPanel => 'لوحة الموزع';
 
   @override
+  String get profile_merchantPanel => 'لوحة التاجر';
+
+  @override
   String get profile_accountManagement => 'إدارة الحساب';
 
   @override
@@ -296,6 +299,15 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'أكمل ملفك الشخصي';
+
+  @override
+  String get auth_selectGender => 'اختر جنسك';
+
+  @override
+  String get auth_genderMale => 'ذكر';
+
+  @override
+  String get auth_genderFemale => 'أنثى';
 
   @override
   String get auth_nickname => 'الاسم المستعار';
@@ -613,6 +625,30 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'غرفة';
+
+  @override
+  String get party_tabEvent => 'فعالية';
+
+  @override
+  String get profile_coin => 'عملة';
+
+  @override
+  String get home_selectCountry => 'اختر الدولة';
+
+  @override
+  String get home_regionMiddleEast => 'الشرق الأوسط';
+
+  @override
+  String get home_regionAsia => 'آسيا';
+
+  @override
+  String get home_regionAmerica => 'أمريكا';
+
+  @override
+  String get home_regionEurope => 'أوروبا';
+
+  @override
+  String get home_regionAfrica => 'أفريقيا';
 
   @override
   String get party_tooltipRanking => 'الترتيب';
@@ -1601,4 +1637,11 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'لا يمكنك إرسال أو استقبال رسائل في هذه المحادثة.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'هل أنت متأكد أنك تريد مغادرة هذه الغرفة؟';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'هل تريد الدخول إلى هذه الغرفة؟';
 }

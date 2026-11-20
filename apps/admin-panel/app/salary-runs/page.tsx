@@ -3,27 +3,7 @@ import Link from "next/link";
 import { ArrowLeft, Wallet } from "lucide-react";
 import { SalaryRunsClient } from "./SalaryRunsClient";
 import { getPeriodSalaryOverview } from "@/lib/salary-hub/queries";
-function currentPeriodId(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = d.getDate();
-  return day <= 15 ? `${y}-${m}-A` : `${y}-${m}-B`;
-}
-function prevPeriodId(): string {
-  const d = new Date();
-  const day = d.getDate();
-  if (day <= 15) {
-    d.setMonth(d.getMonth() - 1);
-    d.setDate(20);
-  } else {
-    d.setDate(1);
-  }
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const suffix = d.getDate() <= 15 ? "A" : "B";
-  return `${y}-${m}-${suffix}`;
-}
+import { currentPeriodId, prevPeriodId } from "@/lib/salary-hub/constants";
 export default async function SalaryRunsPage() {
   const ids = [currentPeriodId(), prevPeriodId()];
   const { data: periods } = await supabaseAdmin

@@ -175,27 +175,34 @@ export async function setRoomPinSlot(roomId: string, slot: number) {
     }
 
     revalidatePath("/settings/rooms");
-    return { success: true as const };
+    // The caller needs the resulting position to update its own list without
+    // refetching.
+    return { success: true as const, pinOrder: pinSlot };
   } catch (error: any) {
     console.error("setRoomPinSlot:", error);
     return { success: false as const, error: error.message as string };
   }
 }
 
-/** @deprecated Prefer setRoomPinSlot — kept for older callers. */
+/**
+ * Feature a room on the home screen, or stop featuring it.
+ *
+ * Exactly one room is featured at a time, so pinning replaces whatever was
+ * featured before. This also clears rooms still sitting on positions 2 and 3
+ * from the previous three-slot layout, which the app no longer draws.
+ */
 export async function setRoomPinned(roomId: string, pinned: boolean) {
   if (!pinned) return setRoomPinSlot(roomId, 0);
-  // Auto-assign lowest free slot 1–3.
-  const { data } = await supabaseAdmin
-    .from("rooms")
-    .select("pin_order")
-    .eq("is_pinned", true)
-    .gte("pin_order", 1)
-    .lte("pin_order", 3);
-  const used = new Set((data ?? []).map((r: any) => Number(r.pin_order)));
-  const free = [1, 2, 3].find((s) => !used.has(s));
-  if (!free) {
-    return { success: false as const, error: "All pin slots 1–3 are full" };
+  try {
+    const { error } = await supabaseAdmin
+      .from("rooms")
+      .update({ is_pinned: false, pin_order: 0 })
+      .eq("is_pinned", true)
+      .neq("id", roomId);
+    if (error) throw error;
+  } catch (error: any) {
+    console.error("setRoomPinned clear:", error);
+    return { success: false as const, error: error.message as string };
   }
-  return setRoomPinSlot(roomId, free);
+  return setRoomPinSlot(roomId, 1);
 }

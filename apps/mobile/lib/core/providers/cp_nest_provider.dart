@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/provider_cache.dart';
 import 'package:sk_live/core/util/user_search_query.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 class CPNestItemModel {
   final String id;
@@ -59,7 +60,7 @@ final cpNestItemsProvider = FutureProvider<List<CPNestItemModel>>((ref) async {
         .map((json) => CPNestItemModel.fromJson(json))
         .toList();
   } catch (e) {
-    print('Error fetching CP Nest items: $e');
+    devLog('Error fetching CP Nest items: $e');
     return [];
   }
 });
@@ -113,7 +114,7 @@ final cpNestUserSearchProvider = FutureProvider.autoDispose
             .limit(20);
         return List<Map<String, dynamic>>.from(response);
       } catch (e) {
-        print('Error searching users: $e');
+        devLog('Error searching users: $e');
         return [];
       }
     });

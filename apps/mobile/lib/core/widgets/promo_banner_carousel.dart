@@ -13,9 +13,12 @@ class PromoBannerCarousel extends StatelessWidget {
     this.viewportFraction = 1,
     this.enlargeCenterPage = false,
     this.transformWidth = 960,
+    this.transformHeight,
     this.placeholder,
     this.errorBuilder,
     this.onBannerTap,
+    this.onPageChanged,
+    this.active = true,
   });
 
   static const double topAspectRatio = 1280 / 560;
@@ -40,10 +43,21 @@ class PromoBannerCarousel extends StatelessWidget {
   final double viewportFraction;
   final bool enlargeCenterPage;
   final int transformWidth;
+
+  /// Server-side CDN crop height. When null, the render endpoint keeps the
+  /// source aspect ratio instead of cropping to [height], so the decode can
+  /// be far larger than what is actually painted (see [media_url_util.dart]).
+  final int? transformHeight;
   final Widget Function(BuildContext context, String url)? placeholder;
   final Widget Function(BuildContext context, String url, dynamic error)?
   errorBuilder;
   final void Function(Map<String, dynamic> banner)? onBannerTap;
+
+  final ValueChanged<int>? onPageChanged;
+
+  /// Set false to stop autoplay/timers while this carousel is scrolled out
+  /// of view or its tab is hidden, without unmounting it.
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -51,17 +65,21 @@ class PromoBannerCarousel extends StatelessWidget {
 
     final width = MediaQuery.sizeOf(context).width;
     final h = height ?? heightForWidth(width, ratio: aspectRatio);
+    final canLoop = banners.length > 1;
 
     return CarouselSlider(
       options: CarouselOptions(
         height: h,
-        autoPlay: banners.length > 1,
+        autoPlay: active && canLoop,
         enlargeCenterPage: enlargeCenterPage,
         aspectRatio: aspectRatio,
         autoPlayCurve: Curves.fastOutSlowIn,
-        enableInfiniteScroll: banners.length > 1,
+        enableInfiniteScroll: canLoop,
         autoPlayAnimationDuration: const Duration(milliseconds: 800),
         viewportFraction: viewportFraction,
+        onPageChanged: onPageChanged == null
+            ? null
+            : (index, _) => onPageChanged!(index),
       ),
       items: banners.map((banner) {
         final url = banner['image_url']?.toString() ?? '';
@@ -77,8 +95,12 @@ class PromoBannerCarousel extends StatelessWidget {
                   alignment: Alignment.center,
                   width: double.infinity,
                   height: h,
+                  fadeInDuration: Duration.zero,
+                  fadeOutDuration: Duration.zero,
                   transformWidth: transformWidth,
+                  transformHeight: transformHeight,
                   memCacheWidth: transformWidth,
+                  memCacheHeight: transformHeight,
                   placeholder:
                       placeholder ??
                       (_, _) => ColoredBox(

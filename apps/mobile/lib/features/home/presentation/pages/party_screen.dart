@@ -18,7 +18,11 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/party_screen_config_provider.dart';
 import 'package:sk_live/core/providers/party_events_provider.dart';
-import 'package:sk_live/features/home/presentation/widgets/party_screen_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_chips_row.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_country_sheet.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_room_card.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_tab_bar.dart';
 import 'package:sk_live/features/home/presentation/widgets/home_discovery_tab.dart';
 import 'package:sk_live/features/home/presentation/widgets/home_party_banner_slider.dart';
 import 'package:sk_live/core/widgets/ranking_frame_media.dart';
@@ -77,20 +81,7 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
       for (final room in covers.take(HiveCacheService.coverLimit)) {
         final raw = room['image_url'] as String?;
         if (raw == null || raw.isEmpty) continue;
-        AppNetworkImageProvider(
-              raw,
-              transformWidth: cacheW,
-              transformQuality: 85,
-              maxWidth: cacheW,
-              maxHeight: cacheW,
-            )
-            .resolve(const ImageConfiguration())
-            .addListener(
-              ImageStreamListener(
-                (_, __) {},
-                onError: (e, _) => debugPrint('[prewarm] skip: $e'),
-              ),
-            );
+        retainRoomCover(raw, cacheW);
       }
     });
   }
@@ -290,40 +281,13 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
                   );
                 },
               )
-            : Container(
-                margin: const EdgeInsets.only(left: 8, right: 4),
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  indicatorColor: const Color(0xFFFF4D8D),
-                  indicatorWeight: 3,
-                  indicatorSize: TabBarIndicatorSize.label,
-                  labelColor: const Color(0xFFFF4D8D),
-                  unselectedLabelColor: const Color(0xFF1A1A1A),
-                  dividerColor: Colors.transparent,
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                  labelStyle: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  unselectedLabelStyle: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  tabs: [
-                    Tab(text: context.l10n.party_tabHot),
-                    Tab(text: context.l10n.party_tabRoom),
-                    Tab(
-                      child: Image.asset(
-                        'assets/home/tabs/event_tab.webp',
-                        height: 22,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
-                      ),
-                    ),
-                  ],
-                ),
+            : HomeRefTabBar(
+                controller: _tabController,
+                labels: [
+                  context.l10n.party_tabHot,
+                  context.l10n.party_tabRoom,
+                  context.l10n.party_tabEvent,
+                ],
               ),
         actions: [
           if (_isSearching)
@@ -335,34 +299,43 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
             IconButton(
               onPressed: _openGiftCenterRanking,
               tooltip: context.l10n.party_tooltipRanking,
-              icon: Image.asset(
-                'assets/home/tabs/cup.webp',
-                width: 28,
-                height: 28,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
+              icon: HomeRefTabBar.rowIcon(
+                context,
+                Image.asset(
+                  'assets/home/tabs/cup.webp',
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
             ),
             IconButton(
               onPressed: () => setState(() => _isSearching = true),
               tooltip: context.l10n.party_tooltipSearch,
-              icon: Image.asset(
-                'assets/home/tabs/search.webp',
-                width: 26,
-                height: 26,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
+              icon: HomeRefTabBar.rowIcon(
+                context,
+                Image.asset(
+                  'assets/design/home/top_search_gold.webp',
+                  width: 26,
+                  height: 26,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
             ),
             IconButton(
               onPressed: () => unawaited(_openMyRoom()),
               tooltip: context.l10n.party_tooltipMyRoom,
-              icon: Image.asset(
-                'assets/home/tabs/home_pulse.webp',
-                width: 28,
-                height: 28,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
+              icon: HomeRefTabBar.rowIcon(
+                context,
+                Image.asset(
+                  'assets/design/home/top_myroom_masjid.webp',
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
             ),
           ],
@@ -371,7 +344,7 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const PartyScreenBackground(),
+          const HomeRefBackground(),
           Column(
             children: [
               SizedBox(
@@ -394,6 +367,7 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
                                 _buildRoomsShimmer(count: count),
                             onTopBannerTap: (banner) =>
                                 unawaited(_openTopBanner(banner)),
+                            chipsRow: _buildHotChipsRow(),
                           ),
                           _buildCountryTab(),
                           const PartyEventsTab(),
@@ -614,36 +588,50 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
     final rest = rooms.length > insertAfter
         ? rooms.sublist(insertAfter)
         : <Map<String, dynamic>>[];
-    final topFrames = const <int, String>{};
+    final s = HomeRefRoomCard.scaleOf(context);
 
     Widget gridFor(
       List<Map<String, dynamic>> chunk, {
       required int indexOffset,
     }) {
       return SliverPadding(
-        padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+        padding: EdgeInsets.symmetric(horizontal: HomeRefRoomCard.side * s),
         sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 2,
-            childAspectRatio: 0.82,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
+            mainAxisExtent: HomeRefRoomCard.cardHeight * s,
+            mainAxisSpacing: HomeRefRoomCard.gap * s,
+            crossAxisSpacing: HomeRefRoomCard.gap * s,
           ),
-          delegate: SliverChildBuilderDelegate((context, index) {
-            final room = chunk[index];
-            final id = room['id']?.toString() ?? '';
-            final visualIndex = indexOffset + index;
-            return RepaintBoundary(
-              key: ValueKey('hot-room-$id'),
-              child: _buildRoomCard(
-                room,
-                visualIndex,
-                dailyGiftTotal: giftTotals[id] ?? 0,
-                showTopRankFrames: false,
-                topFrames: topFrames,
-              ),
-            );
-          }, childCount: chunk.length),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final room = chunk[index];
+              final id = room['id']?.toString() ?? '';
+              return RepaintBoundary(
+                key: ValueKey('hot-room-$id'),
+                child: HomeRefRoomCard(
+                  room: room,
+                  giftTotal: giftTotals[id] ?? 0,
+                  flag: _buildCountryFlag(
+                    _roomCountryCode(room),
+                    size: 46 * s,
+                    lineHeight: 1,
+                  ),
+                  hostName:
+                      room['host_name']?.toString() ??
+                      context.l10n.party_unknownHost,
+                  locked: roomIsLocked(room),
+                  onTap: () =>
+                      openRoomLive(context, Map<String, dynamic>.from(room)),
+                ),
+              );
+            },
+            childCount: chunk.length,
+            // Page is ~24+16 rooms. Keep-alives cover a short scroll; the
+            // discovery cache extent still drops cards far off screen.
+            addAutomaticKeepAlives: true,
+            addRepaintBoundaries: false,
+          ),
         ),
       );
     }
@@ -803,6 +791,8 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
                                 imageUrl: room['image_url'],
                                 fit: BoxFit.cover,
                                 alignment: Alignment.topCenter,
+                                fadeInDuration: Duration.zero,
+                                fadeOutDuration: Duration.zero,
                                 transformWidth: cacheW,
                                 transformHeight: cacheW,
                                 memCacheWidth: cacheW,
@@ -1006,6 +996,10 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
                                 imageUrl: avatars[i].toString(),
                                 transformWidth: 48,
                                 transformHeight: 48,
+                                memCacheWidth: 48,
+                                memCacheHeight: 48,
+                                fadeInDuration: Duration.zero,
+                                fadeOutDuration: Duration.zero,
                                 fit: BoxFit.cover,
                               )
                             : Container(color: AppColors.primaryUltraLight),
@@ -1505,26 +1499,39 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
     return '';
   }
 
-  Widget _buildCountryFlag(String code) {
+  Widget _buildCountryFlag(
+    String code, {
+    double size = 16,
+    double? lineHeight,
+  }) {
     final normalized = code.trim().toUpperCase();
     if (normalized.length < 2) {
-      return const Text('🏳️', style: TextStyle(fontSize: 16));
+      return Text(
+        '🏳️',
+        style: TextStyle(fontSize: size, height: lineHeight),
+      );
     }
     try {
       return Text(
         Country.parse(normalized).flagEmoji,
-        style: const TextStyle(fontSize: 16),
+        style: TextStyle(fontSize: size, height: lineHeight),
       );
     } catch (_) {
       final c0 = normalized.codeUnitAt(0);
       final c1 = normalized.codeUnitAt(1);
       if (c0 < 0x41 || c0 > 0x5A || c1 < 0x41 || c1 > 0x5A) {
-        return const Text('🏳️', style: TextStyle(fontSize: 16));
+        return Text(
+          '🏳️',
+          style: TextStyle(fontSize: size, height: lineHeight),
+        );
       }
       final flag =
           String.fromCharCode(c0 - 0x41 + 0x1F1E6) +
           String.fromCharCode(c1 - 0x41 + 0x1F1E6);
-      return Text(flag, style: const TextStyle(fontSize: 16));
+      return Text(
+        flag,
+        style: TextStyle(fontSize: size, height: lineHeight),
+      );
     }
   }
 
@@ -1928,27 +1935,35 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
     );
   }
 
-  void _pickCountryForRoomTab() {
-    showCountryPicker(
-      context: context,
-      showPhoneCode: false,
+  Widget _buildHotChipsRow() {
+    final countries = [
+      for (final code in _hotChipCountryCodes)
+        (code: code, label: Country.parse(code).name),
+    ];
+    return HomeRefChipsRow(
+      popularLabel: context.l10n.party_tabHot,
+      countries: countries,
+      onCountryTap: _openRoomTabForCountry,
+      onFilterTap: () =>
+          _pickCountryForRoomTab(onPicked: () => _tabController.animateTo(1)),
+    );
+  }
+
+  static const List<String> _hotChipCountryCodes = ['PK', 'SA', 'AE', 'IN'];
+
+  void _openRoomTabForCountry(String countryCode) {
+    ref.read(selectedCountryProvider.notifier).state = countryCode;
+    _tabController.animateTo(1);
+  }
+
+  void _pickCountryForRoomTab({VoidCallback? onPicked}) {
+    HomeRefCountrySheet.show(
+      context,
+      selectedCode: ref.read(selectedCountryProvider),
       onSelect: (Country country) {
         ref.read(selectedCountryProvider.notifier).state = country.countryCode;
+        onPicked?.call();
       },
-      countryListTheme: CountryListThemeData(
-        backgroundColor: AppColors.surface,
-        textStyle: const TextStyle(color: AppColors.textPrimary, fontSize: 16),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        inputDecoration: InputDecoration(
-          hintText: context.l10n.party_searchCountry,
-          filled: true,
-          fillColor: AppColors.primaryUltraLight,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
-            borderSide: BorderSide.none,
-          ),
-        ),
-      ),
     );
   }
 
@@ -2039,6 +2054,8 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
                             return AppNetworkImage(
                               imageUrl: room['image_url'],
                               fit: BoxFit.cover,
+                              fadeInDuration: Duration.zero,
+                              fadeOutDuration: Duration.zero,
                               transformWidth: cacheW,
                               transformHeight: cacheW,
                               memCacheWidth: cacheW,

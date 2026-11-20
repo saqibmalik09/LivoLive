@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 class RoomInfoNotifier
     extends FamilyAsyncNotifier<Map<String, dynamic>?, String?> {
@@ -41,9 +42,9 @@ class RoomInfoNotifier
   Future<bool> updateRoom(String roomId, Map<String, dynamic> updates) async {
     try {
       final supabase = Supabase.instance.client;
-      print('--- [DEBUG] Updating Room $roomId with: $updates');
+      devLog('--- [DEBUG] Updating Room $roomId with: $updates');
       await supabase.from('rooms').update(updates).eq('id', roomId);
-      print('--- [DEBUG] Room updated successfully in Supabase');
+      devLog('--- [DEBUG] Room updated successfully in Supabase');
 
       if (state.hasValue && state.value != null) {
         final currentData = Map<String, dynamic>.from(state.value!);
@@ -54,7 +55,7 @@ class RoomInfoNotifier
       }
       return true;
     } catch (e, stack) {
-      print('--- [DEBUG] Error updating room: $e');
+      devLog('--- [DEBUG] Error updating room: $e');
       state = AsyncValue.error(e, stack);
       return false;
     }
@@ -73,7 +74,7 @@ class RoomInfoNotifier
           .limit(1)
           .maybeSingle();
       if (existing != null) {
-        print('--- [DEBUG] Host already has a room: ${existing['id']}');
+        devLog('--- [DEBUG] Host already has a room: ${existing['id']}');
         ref.invalidateSelf();
         return false;
       }
@@ -85,15 +86,15 @@ class RoomInfoNotifier
         ...data,
       };
 
-      print('--- [DEBUG] Creating Room with data: $roomData');
+      devLog('--- [DEBUG] Creating Room with data: $roomData');
       await supabase.from('rooms').insert(roomData);
-      print('--- [DEBUG] Room created successfully');
+      devLog('--- [DEBUG] Room created successfully');
 
       ref.invalidateSelf();
       return true;
     } catch (e, stack) {
-      print('--- [DEBUG] Error creating room: $e');
-      print('--- [DEBUG] Stack trace: $stack');
+      devLog('--- [DEBUG] Error creating room: $e');
+      devLog('--- [DEBUG] Stack trace: $stack');
       state = AsyncValue.error(e, stack);
       return false;
     }
@@ -106,7 +107,7 @@ class RoomInfoNotifier
       ref.invalidateSelf();
       return true;
     } catch (e, stack) {
-      print('--- [DEBUG] Error deleting room: $e');
+      devLog('--- [DEBUG] Error deleting room: $e');
       state = AsyncValue.error(e, stack);
       return false;
     }

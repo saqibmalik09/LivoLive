@@ -7,6 +7,7 @@ class RoomDeepLinkService {
   static const String roomHost = 'room';
 
   static String? _pendingRoomId;
+  static void Function(String roomId)? _onRoomId;
   static final AppLinks _appLinks = AppLinks();
 
   static String buildRoomLink(String roomId) => '$scheme://$roomHost/$roomId';
@@ -29,6 +30,7 @@ class RoomDeepLinkService {
   }
 
   static void listen(void Function(String roomId) onRoomId) {
+    _onRoomId = onRoomId;
     _appLinks.uriLinkStream.listen((uri) {
       final roomId = parseRoomId(uri);
       if (roomId != null) onRoomId(roomId);
@@ -49,7 +51,16 @@ class RoomDeepLinkService {
 
   static void _setPendingFromUri(Uri? uri) {
     final id = parseRoomId(uri);
-    if (id != null) _pendingRoomId = id;
+    if (id == null) return;
+    // Router is already running (startup did not wait on a slow link).
+    // Open the room directly and skip the pending slot so it is not consumed twice.
+    final listener = _onRoomId;
+    if (listener != null) {
+      _pendingRoomId = null;
+      listener(id);
+      return;
+    }
+    _pendingRoomId = id;
   }
 
   static String? parseRoomId(Uri? uri) {

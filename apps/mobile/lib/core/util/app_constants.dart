@@ -37,7 +37,10 @@ class AppConstants {
 
   static const int dmHydrateLimit = 100;
 
-  static const String realtimeGatewayUrl = 'https://gateway.skliveparty.online';
+  static const String realtimeGatewayUrl = String.fromEnvironment(
+    'GATEWAY_URL',
+    defaultValue: 'https://gateway.skliveparty.online',
+  );
 
   static String get maintenanceBypassToken => kDebugMode
       ? const String.fromEnvironment('MAINTENANCE_BYPASS_TOKEN')

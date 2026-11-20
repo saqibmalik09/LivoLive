@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/util/baishun_game.dart';
 import 'package:sk_live/core/util/game_audience_filter.dart';
+import 'package:sk_live/core/util/wave_game.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SuGameItem {
@@ -106,7 +107,28 @@ class SuGameCategory {
   }
 }
 
+SuGameItem? _waveHubItem(Map<String, dynamic> card, int sortOrder) {
+  final id = card['game_id'] ?? card['id'];
+  final play = card['play_url']?.toString() ?? '';
+  if (id == null || play.isEmpty) return null;
+  final slug = card['route_slug']?.toString().trim() ?? '';
+  return SuGameItem(
+    id: 'wave-$id',
+    kind: 'h5',
+    slug: slug.isNotEmpty ? slug : 'wave-$id',
+    name: card['name']?.toString() ?? 'Game',
+    iconUrl: card['listing_image']?.toString() ?? '',
+    gameUrl: play,
+    sortOrder: sortOrder,
+    maintenanceMode: false,
+    configData: {'provider': 'wave', 'game_id': id},
+    configId: 'wave-$id',
+    heightPercent: (card['sheet_height_percent'] as num?)?.toDouble() ?? 100,
+  );
+}
+
 Future<List<SuGameCategory>> _fetchSuGamesHubRemote() async {
+  final waveFuture = fetchWaveCatalog();
   final client = Supabase.instance.client;
 
   final catRes = await client
@@ -116,7 +138,7 @@ Future<List<SuGameCategory>> _fetchSuGamesHubRemote() async {
       .order('sort_order', ascending: true);
 
   final categories = (catRes as List).cast<Map<String, dynamic>>();
-  if (categories.isEmpty) return const [];
+  if (categories.isEmpty) return _appendWaveCategory(const [], waveFuture);
 
   final catIds = categories
       .map((c) => c['id']?.toString() ?? '')
@@ -143,7 +165,7 @@ Future<List<SuGameCategory>> _fetchSuGamesHubRemote() async {
     final gamesRes = await client
         .from('game_configs')
         .select(
-          'id, slug, name, icon_url, game_url, is_active, maintenance_mode, maintenance_message, webview_height_percent, config_data',
+          'id, slug, name, icon_url, game_url, is_active, maintenance_mode, maintenance_message, webview_height_percent, config_data, test_game_url, test_user_ids',
         )
         .inFilter('slug', h5Slugs);
     for (final g in (gamesRes as List).cast<Map<String, dynamic>>()) {
@@ -184,6 +206,8 @@ Future<List<SuGameCategory>> _fetchSuGamesHubRemote() async {
     final url = resolveBaishunGameUrl({
       'game_url': game['game_url'],
       'config_data': cfgMap,
+      'test_game_url': game['test_game_url'],
+      'test_user_ids': game['test_user_ids'],
     }, fallbackUrl: game['game_url']?.toString());
     if (url.isEmpty) continue;
 
@@ -224,7 +248,30 @@ Future<List<SuGameCategory>> _fetchSuGamesHubRemote() async {
       ),
     );
   }
-  return out;
+
+  return _appendWaveCategory(out, waveFuture);
+}
+
+Future<List<SuGameCategory>> _appendWaveCategory(
+  List<SuGameCategory> categories,
+  Future<Map<String, dynamic>?> waveFuture,
+) async {
+  final waveCards = waveFullCards(await waveFuture);
+  final waveGames = <SuGameItem>[];
+  for (var i = 0; i < waveCards.length; i++) {
+    final item = _waveHubItem(waveCards[i], 1000 - i);
+    if (item != null) waveGames.add(item);
+  }
+  if (waveGames.isEmpty) return categories;
+  return [
+    ...categories,
+    SuGameCategory(
+      id: 'wave',
+      name: 'Wave Games',
+      sortOrder: 900,
+      games: waveGames,
+    ),
+  ];
 }
 
 Future<List<SuGameCategory>> _withAudience(

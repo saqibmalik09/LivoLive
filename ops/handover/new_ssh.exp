@@ -1,0 +1,11 @@
+#!/usr/bin/expect -f
+set timeout 900
+set cmd [lindex $argv 0]
+set fp [open "pw_new" r]; set pw [string trim [read $fp]]; close $fp
+spawn ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no sklive@13.140.57.228 $cmd
+expect {
+  -re "assword:" { send -- "$pw\r"; exp_continue }
+  eof
+}
+catch wait result
+exit [lindex $result 3]

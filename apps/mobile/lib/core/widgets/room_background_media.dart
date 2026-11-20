@@ -9,6 +9,9 @@ class RoomAssets {
   static const defaultBackground = 'assets/room/room-default-bg.webp';
 }
 
+/// Opaque room color painted before a theme image decodes.
+const Color roomBackdropColor = Color(0xFF1A0A2E);
+
 class RoomDefaultBackground extends StatelessWidget {
   const RoomDefaultBackground({
     super.key,
@@ -21,21 +24,19 @@ class RoomDefaultBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final media = Image.asset(
-      RoomAssets.defaultBackground,
-      fit: fit,
-      width: double.infinity,
-      height: double.infinity,
-      errorBuilder: (_, __, ___) => const _FallbackRoomGradient(),
-    );
-
-    if (darkenAlpha <= 0) return media;
-
     return Stack(
       fit: StackFit.expand,
       children: [
-        media,
-        ColoredBox(color: Colors.black.withValues(alpha: darkenAlpha)),
+        const ColoredBox(color: roomBackdropColor),
+        Image.asset(
+          RoomAssets.defaultBackground,
+          fit: fit,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (_, _, _) => const _FallbackRoomGradient(),
+        ),
+        if (darkenAlpha > 0)
+          ColoredBox(color: Colors.black.withValues(alpha: darkenAlpha)),
       ],
     );
   }
@@ -74,16 +75,34 @@ class RoomBackgroundMedia extends StatelessWidget {
   Widget build(BuildContext context) {
     final media = MediaUrlUtil.isSvgaUrl(url)
         ? RaveSVGAPlayer(resUrl: url, fit: fit, repeat: true)
-        : CachedNetworkImage(imageUrl: url, fit: fit);
-
-    if (darkenAlpha <= 0) return media;
+        : CachedNetworkImage(
+            imageUrl: url,
+            fit: fit,
+            fadeInDuration: Duration.zero,
+            // Default fade-out is 1s and sits on top of the image.
+            fadeOutDuration: Duration.zero,
+            placeholder: (_, _) => const ColoredBox(color: roomBackdropColor),
+            // Fills the room screen, so bound the decode to the actual
+            // device size instead of the source image's full resolution —
+            // this still background is the first thing painted on room
+            // entry, before any seat/frame content arrives.
+            memCacheWidth: _backgroundCachePx(context),
+          );
 
     return Stack(
       fit: StackFit.expand,
       children: [
+        const ColoredBox(color: roomBackdropColor),
         media,
-        ColoredBox(color: Colors.black.withValues(alpha: darkenAlpha)),
+        if (darkenAlpha > 0)
+          ColoredBox(color: Colors.black.withValues(alpha: darkenAlpha)),
       ],
     );
   }
+}
+
+int _backgroundCachePx(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  final dpr = MediaQuery.devicePixelRatioOf(context);
+  return (width * dpr).round().clamp(720, 1440);
 }

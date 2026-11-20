@@ -22,11 +22,9 @@ export default async function VoiceBackendSettingsPage() {
           </h1>
         </div>
         <p className="max-w-2xl text-white/55">
-          Selects which stack rooms use. <strong className="text-white/80">Orbit Voice</strong>
-          reaches LiveKit through the Orbit API; <strong className="text-white/80">LiveKit
-          (direct)</strong> mints tokens in our own gateway with no middleman.
-          <strong className="text-white/80">Zego</strong> is the legacy engine. Switching takes
-          effect on the next room join — no app release needed.
+          <strong className="text-white/80">LiveKit</strong> is the only voice backend.
+          Tokens are minted by our own gateway and publish permission is granted on the live
+          connection, so taking the mic is immediate. Orbit and Zego are retired.
         </p>
       </header>
 

@@ -233,6 +233,9 @@ class AppLocalizationsTh extends AppLocalizations {
   String get profile_resellerPanel => 'แผงตัวแทนจำหน่าย';
 
   @override
+  String get profile_merchantPanel => 'แผงผู้ค้า';
+
+  @override
   String get profile_accountManagement => 'การจัดการบัญชี';
 
   @override
@@ -297,6 +300,15 @@ class AppLocalizationsTh extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'กรอกโปรไฟล์ของคุณให้สมบูรณ์';
+
+  @override
+  String get auth_selectGender => 'เลือกเพศของคุณ';
+
+  @override
+  String get auth_genderMale => 'ชาย';
+
+  @override
+  String get auth_genderFemale => 'หญิง';
 
   @override
   String get auth_nickname => 'ชื่อเล่น';
@@ -614,6 +626,30 @@ class AppLocalizationsTh extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'ห้อง';
+
+  @override
+  String get party_tabEvent => 'กิจกรรม';
+
+  @override
+  String get profile_coin => 'เหรียญ';
+
+  @override
+  String get home_selectCountry => 'เลือกประเทศ';
+
+  @override
+  String get home_regionMiddleEast => 'ตะวันออกกลาง';
+
+  @override
+  String get home_regionAsia => 'เอเชีย';
+
+  @override
+  String get home_regionAmerica => 'อเมริกา';
+
+  @override
+  String get home_regionEurope => 'ยุโรป';
+
+  @override
+  String get home_regionAfrica => 'แอฟริกา';
 
   @override
   String get party_tooltipRanking => 'การจัดอันดับ';
@@ -1609,4 +1645,11 @@ class AppLocalizationsTh extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'คุณแน่ใจหรือไม่ว่าต้องการออกจากห้องนี้?';
+
+  @override
+  String get topBanner_enterRoomConfirm => 'คุณต้องการเข้าห้องนี้หรือไม่?';
 }

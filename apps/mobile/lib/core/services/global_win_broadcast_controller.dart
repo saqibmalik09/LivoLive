@@ -8,6 +8,8 @@ import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/suppress_global_patti_provider.dart';
 import 'package:sk_live/core/services/patti_playback_gate.dart';
 import 'package:sk_live/core/util/app_constants.dart';
+import 'package:sk_live/core/util/global_win_svga_util.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:sk_live/features/home/services/room_realtime_socket.dart';
 import 'package:sk_live/features/home/services/room_win_sync_service.dart';
 
@@ -72,12 +74,30 @@ class GlobalWinBroadcastController extends Notifier<GlobalWinBroadcastState> {
     state = const GlobalWinBroadcastState();
   }
 
+  /// Prewarm is best-effort: a failure here must never stop the subscription.
+  Future<void> _prewarmBannerAnimations() async {
+    for (final asset in <String>[
+      ...GlobalWinSvgaUtil.luckyTierAssets,
+      GlobalWinSvgaUtil.giftAsset,
+    ]) {
+      try {
+        await SvgaCache.loadAsset(asset);
+      } catch (e) {
+        debugPrint('[svga] banner prewarm failed for $asset: $e');
+      }
+    }
+  }
+
   void _subscribe() {
     if (_subscribed || !AppConstants.enableGlobalWinSvgaBroadcast) return;
     final session = Supabase.instance.client.auth.currentSession;
     if (session == null) return;
 
     _subscribed = true;
+
+    // Decode the banner animations once, now, rather than when the first win
+    // arrives — the overlay gives up if the decode is not ready in time.
+    unawaited(_prewarmBannerAnimations());
 
     if (AppConstants.useRealtimeGateway) {
       _subscribeGateway();
@@ -150,6 +170,7 @@ class GlobalWinBroadcastController extends Notifier<GlobalWinBroadcastState> {
 
   void _enqueue(GlobalWinAnnouncement win, {String? dedupeKey}) {
     if (ref.read(suppressGlobalPattiProvider)) return;
+    if (!GlobalWinSvgaUtil.showsTopBanner(win)) return;
     final keys = <String>{
       if (dedupeKey != null && dedupeKey.isNotEmpty) dedupeKey,
       if (win.id.isNotEmpty) win.id,

@@ -1,11 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sk_live/core/providers/home_rooms_pagination_provider.dart'
+    show roomListColumns;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 final pinnedPartyRoomsProvider =
     FutureProvider.autoDispose<Map<int, Map<String, dynamic>>>((ref) async {
       final response = await Supabase.instance.client
           .from('active_rooms_with_rankings')
-          .select('*')
+          .select(roomListColumns)
           .eq('is_pinned', true)
           .gte('pin_order', 1)
           .lte('pin_order', 3)

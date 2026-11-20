@@ -14,16 +14,6 @@ class ProfileVisitorsScreen extends ConsumerWidget {
 
   const ProfileVisitorsScreen({super.key, required this.profileId});
 
-  DateTime? _parseVipUntil(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is DateTime) return raw;
-    if (raw is String) return DateTime.tryParse(raw);
-    if (raw is num) {
-      return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
-    }
-    return null;
-  }
-
   Future<List<Map<String, dynamic>>> _fetchVisitors() async {
     final supabase = Supabase.instance.client;
 
@@ -57,14 +47,15 @@ class ProfileVisitorsScreen extends ConsumerWidget {
       ),
       error: (e, _) => _lockedScaffold(context),
       data: (vip) {
+        // `vip_level` is the app's entitlement everywhere else — the badge,
+        // chat privileges, mic emojis, the shop and the profile all read it
+        // on its own. This screen was the only place that also demanded an
+        // unexpired `vip_until`, so a member whose ID showed VIP 6 was told
+        // "VIP 1 Required" here while keeping every other VIP privilege.
+        // Gate on the same thing the rest of the app does.
         final vipLevel = (vip?['vip_level'] as num?)?.toInt() ?? 0;
-        final vipUntil = _parseVipUntil(vip?['vip_until']);
-        final vipActive =
-            vipLevel >= 1 &&
-            vipUntil != null &&
-            vipUntil.isAfter(DateTime.now());
 
-        if (!vipActive) return _lockedScaffold(context);
+        if (vipLevel < 1) return _lockedScaffold(context);
 
         return Scaffold(
           backgroundColor: const Color(0xFF0F0108),
@@ -90,8 +81,53 @@ class ProfileVisitorsScreen extends ConsumerWidget {
                 );
               }
 
+              // Failing to load the list is not the same as not being VIP.
+              // This used to show the "VIP 1 Required" upsell, so a paying
+              // member with a dropped connection was told to buy VIP — the
+              // very complaint that was reported. Say what actually happened.
               if (snapshot.hasError) {
-                return _locked(context);
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.wifi_off_rounded,
+                          color: Colors.white38,
+                          size: 40,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Could not load visitors',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Check your connection and try again.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: () => (context as Element).markNeedsBuild(),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.amber,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }
 
               final visitors = snapshot.data ?? [];

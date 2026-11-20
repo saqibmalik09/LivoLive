@@ -5,6 +5,7 @@ import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/profile_provider.dart';
+import 'package:sk_live/core/providers/seat_wear_cache.dart';
 import 'package:sk_live/core/providers/provider_cache.dart';
 import 'package:sk_live/core/widgets/stretch_chat_bubble.dart';
 
@@ -471,6 +472,7 @@ void invalidateUserInventoryCaches(
   void Function(ProviderOrFamily provider) invalidate,
   String userId,
 ) {
+  SeatWearCache.forget(userId);
   invalidate(userAssetsProvider(userId));
   invalidate(userFullInventoryProvider(userId));
   invalidate(userBestEntranceProvider(userId));

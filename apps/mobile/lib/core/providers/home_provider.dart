@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
+import 'package:sk_live/core/util/dev_log.dart';
 
 const int kHomeTopBannerHeightMin = 80;
 const int kHomeTopBannerHeightMax = 400;
@@ -161,14 +162,14 @@ final activeRoomsProvider = FutureProvider<List<Map<String, dynamic>>>((
 ) async {
   final supabase = Supabase.instance.client;
   try {
-    print('DEBUG: Fetching active rooms from view...');
+    devLog('DEBUG: Fetching active rooms from view...');
     final response = await supabase
         .from('active_rooms_with_rankings')
         .select('*')
         .order('created_at', ascending: false)
         .limit(30);
 
-    print('DEBUG: Successfully fetched ${response.length} active rooms');
+    devLog('DEBUG: Successfully fetched ${response.length} active rooms');
 
     final seen = <String>{};
     final unique = <Map<String, dynamic>>[];
@@ -179,14 +180,14 @@ final activeRoomsProvider = FutureProvider<List<Map<String, dynamic>>>((
       unique.add(Map<String, dynamic>.from(room));
     }
     if (unique.length != response.length) {
-      print(
+      devLog(
         'DEBUG: Deduped active rooms ${response.length} -> ${unique.length}',
       );
     }
     return unique;
   } catch (e, stack) {
-    print('DEBUG ERROR in activeRoomsProvider: $e');
-    print('DEBUG STACKTRACE: $stack');
+    devLog('DEBUG ERROR in activeRoomsProvider: $e');
+    devLog('DEBUG STACKTRACE: $stack');
     rethrow;
   }
 });

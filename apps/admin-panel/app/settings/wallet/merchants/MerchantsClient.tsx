@@ -26,7 +26,7 @@ export function MerchantsClient({ merchants }: { merchants: Merchant[] }) {
   if (merchants.length === 0) {
     return (
       <div className="glass-card p-12 text-center text-white/40">
-        No coin merchants (resellers) yet. Enable reseller on a user profile.
+        No coin sellers yet. Enable the reseller flag on a user profile.
       </div>
     );
   }
@@ -53,7 +53,7 @@ export function MerchantsClient({ merchants }: { merchants: Merchant[] }) {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">
-              Merchant
+              Coin Seller
             </span>
             <button
               disabled={loadingId === m.id}

@@ -1,0 +1,12 @@
+#!/usr/bin/expect -f
+# Same as new_ssh.exp but tolerates long silences (rsync only prints at the end).
+set timeout 7200
+set cmd [lindex $argv 0]
+set fp [open "pw_new" r]; set pw [string trim [read $fp]]; close $fp
+spawn ssh -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o ServerAliveInterval=30 sklive@13.140.57.228 $cmd
+expect {
+  -re "assword:" { send -- "$pw\r"; exp_continue }
+  eof
+}
+catch wait result
+exit [lindex $result 3]

@@ -7,6 +7,7 @@ import '../../features/auth/presentation/pages/email_login_screen.dart';
 import '../../features/auth/presentation/pages/email_password_login_screen.dart';
 import '../../features/auth/presentation/pages/id_login_screen.dart';
 import '../../features/auth/presentation/pages/otp_screen.dart';
+import '../auth/boot_session.dart';
 import '../providers/auth_provider.dart';
 import '../providers/device_ban_provider.dart';
 import '../../features/auth/presentation/pages/profile_setup_screen.dart';
@@ -31,6 +32,7 @@ import '../../features/auth/presentation/pages/inventory_screen.dart';
 import '../../features/auth/presentation/pages/cp_level_screen.dart';
 import '../../features/auth/presentation/pages/room_level_screen.dart';
 import '../../features/auth/presentation/pages/reseller_screen.dart';
+import '../../features/merchant/presentation/pages/merchant_screen.dart';
 import '../../features/home/presentation/pages/room_deep_link_screen.dart';
 import 'package:sk_live/core/services/room_deep_link_service.dart';
 import 'package:sk_live/core/router/room_route_observer.dart';
@@ -83,6 +85,7 @@ class AppRouter {
   static const String roomLevel = '/room-level';
   static const String roomDeepLink = '/room';
   static const String reseller = '/reseller';
+  static const String merchant = '/merchant';
 
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
@@ -93,14 +96,27 @@ class AppRouter {
     final router = GoRouter(
       navigatorKey: navigatorKey,
       observers: [roomRouteObserver, telemetryRouteObserver],
-      initialLocation: splash,
+      // Chosen after the first frame from the local session. Splash is only
+      // the fallback when that probe has not reported yet.
+      initialLocation: switch (BootSession.instance.destination) {
+        BootDestination.home => home,
+        BootDestination.login => login,
+        null => splash,
+      },
       refreshListenable: notifier,
       redirect: (context, state) {
         final authAsync = ref.read(authStateProvider);
         final profileState = ref.read(userProfileProvider);
         final deviceBanState = ref.read(deviceBanProvider);
 
-        final clientSession = Supabase.instance.client.auth.currentSession;
+        Session? clientSession;
+        try {
+          if (Supabase.instance.isInitialized) {
+            clientSession = Supabase.instance.client.auth.currentSession;
+          }
+        } catch (e) {
+          debugPrint('[BOOT] supabase session unavailable: $e');
+        }
         final streamSession = authAsync.asData?.value.session;
         final session = clientSession ?? streamSession;
         final loggedIn = session != null;
@@ -141,6 +157,15 @@ class AppRouter {
         }
         if (isBannedRoute) {
           return loggedIn ? home : login;
+        }
+
+        // Splash leaves from the local probe only. Auth loading, token
+        // refresh, and the signed-out recovery retries must not hold `/`.
+        if (isSplash) {
+          final boot = BootSession.instance.destination;
+          if (boot == null) return null;
+          if (boot == BootDestination.login && !loggedIn) return login;
+          return home;
         }
 
         if (!loggedIn) {
@@ -369,6 +394,22 @@ class AppRouter {
           },
         ),
         GoRoute(
+          path: merchant,
+          builder: (context, state) {
+            final extra = state.extra;
+            var tab = 0;
+            if (extra is Map) {
+              final t = extra['tab']?.toString();
+              if (t == 'recharge') tab = 1;
+              if (t == 'sellers') tab = 2;
+              if (t == 'history') tab = 3;
+              final n = extra['initialTab'];
+              if (n is int) tab = n.clamp(0, 3);
+            }
+            return MerchantScreen(initialTab: tab);
+          },
+        ),
+        GoRoute(
           path: '$roomDeepLink/:roomId',
           builder: (context, state) {
             final roomId = state.pathParameters['roomId'] ?? '';
@@ -382,7 +423,10 @@ class AppRouter {
       router.go('$roomDeepLink/$roomId');
     });
 
-    ref.onDispose(router.dispose);
+    ref.onDispose(() {
+      router.dispose();
+      notifier.dispose();
+    });
 
     return router;
   });
@@ -392,7 +436,14 @@ class _RouterNotifier extends ChangeNotifier {
   final Ref _ref;
   int _lastSessionExpiredTick = 0;
 
+  @override
+  void dispose() {
+    BootSession.instance.removeListener(notifyListeners);
+    super.dispose();
+  }
+
   _RouterNotifier(this._ref) {
+    BootSession.instance.addListener(notifyListeners);
     _ref.listen(authStateProvider, (_, __) => notifyListeners());
     _ref.listen(deviceBanProvider, (_, __) => notifyListeners());
     _ref.listen(authRecoveryInProgressProvider, (_, __) => notifyListeners());

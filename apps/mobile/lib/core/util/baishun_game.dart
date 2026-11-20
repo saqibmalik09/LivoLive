@@ -10,7 +10,7 @@ import 'package:sk_live/core/util/tulasi_game.dart';
 
 const String kBaishunAppChannel = 'sklive';
 const int kBaishunAppId = 8740978342;
-const int kBaishunGsp = 110;
+const int kBaishunGsp = 101;
 
 const String kBaishunCurrencyIcon =
     'https://bsyx-store.s3.ap-southeast-1.amazonaws.com/game-icons/20230906-163004.png';
@@ -50,10 +50,20 @@ bool isBaishunLandscape(Map<String, dynamic>? game) {
   return isTulasiLandscape(game);
 }
 
+/// The package URL a given viewer should load for [game].
+///
+/// An admin can point a game at a candidate package for named testers only
+/// (`test_game_url` + `test_user_ids`). Everyone else keeps the normal URL, so
+/// a URL that turns out to be broken can only affect the people testing it —
+/// swapping `game_url` outright takes the game down for every player at once.
 String resolveBaishunGameUrl(
   Map<String, dynamic>? game, {
   String? fallbackUrl,
 }) {
+  final testUrl = game?['test_game_url']?.toString().trim() ?? '';
+  if (testUrl.isNotEmpty && _viewerIsTester(game?['test_user_ids'])) {
+    return testUrl;
+  }
   final cfg = game?['config_data'];
   if (cfg is Map) {
     final download = cfg['download_url']?.toString().trim() ?? '';
@@ -62,6 +72,16 @@ String resolveBaishunGameUrl(
   final fromRow = game?['game_url']?.toString().trim() ?? '';
   if (fromRow.isNotEmpty) return fromRow;
   return fallbackUrl?.trim() ?? '';
+}
+
+bool _viewerIsTester(dynamic rawIds) {
+  if (rawIds is! List || rawIds.isEmpty) return false;
+  final me = Supabase.instance.client.auth.currentUser?.id;
+  if (me == null || me.isEmpty) return false;
+  for (final id in rawIds) {
+    if (id?.toString().trim().toLowerCase() == me.toLowerCase()) return true;
+  }
+  return false;
 }
 
 String baishunLanguageCode(BuildContext context) {

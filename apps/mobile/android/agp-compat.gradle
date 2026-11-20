@@ -1,0 +1,50 @@
+// AGP 9 rejects getDefaultProguardFile('proguard-android.txt').
+// Older Flutter plugins still call it. Map that name before their script continues.
+def allowLegacyProguardFile = { Project sub, String pluginId ->
+    sub.pluginManager.withPlugin(pluginId) {
+        def androidExt = sub.extensions.findByName("android")
+        if (androidExt == null) {
+            return
+        }
+        def original = androidExt.metaClass.getMetaMethod("getDefaultProguardFile", [String] as Class[])
+        if (original == null) {
+            return
+        }
+        androidExt.metaClass.getDefaultProguardFile = { String name ->
+            def mapped = name == "proguard-android.txt" ? "proguard-android-optimize.txt" : name
+            original.doMethodInvoke(androidExt, [mapped] as Object[])
+        }
+    }
+}
+
+gradle.beforeProject { project ->
+    def allowJcenter = { handler ->
+        handler.metaClass.jcenter = { Object... ignored ->
+            handler.mavenCentral()
+        }
+    }
+    allowJcenter(project.buildscript.repositories)
+    allowJcenter(project.repositories)
+}
+
+def raiseCompileSdk = { Project sub, String pluginId ->
+    sub.pluginManager.withPlugin(pluginId) {
+        def components = sub.extensions.findByName("androidComponents")
+        if (components == null) {
+            return
+        }
+        components.finalizeDsl { ext ->
+            def sdk = ext.compileSdk
+            if (sdk == null || sdk < 36) {
+                ext.compileSdk = 36
+            }
+        }
+    }
+}
+
+subprojects { sub ->
+    allowLegacyProguardFile(sub, "com.android.library")
+    allowLegacyProguardFile(sub, "com.android.application")
+    raiseCompileSdk(sub, "com.android.library")
+    raiseCompileSdk(sub, "com.android.application")
+}

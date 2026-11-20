@@ -11,24 +11,35 @@ class HomePartyBannerSlider extends ConsumerWidget {
     super.key,
     this.placement = 'top',
     this.onBannerTap,
+    this.onPageChanged,
+    this.active = true,
   });
 
   final String placement;
   final void Function(Map<String, dynamic> banner)? onBannerTap;
 
+  final ValueChanged<int>? onPageChanged;
+
+  /// Set false to stop banner autoplay while scrolled out of view or the
+  /// Home tab is hidden, without unmounting the carousel.
+  final bool active;
+
+  static const double refDesignWidth = 750;
+  static const double refTopHeight = 200;
+  static const double refTopSide = 25;
+  static const double refTopRadius = 20;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bannersAsync = ref.watch(bannersProvider(placement));
-    final contentW = MediaQuery.sizeOf(context).width - 16;
+    final screenW = MediaQuery.sizeOf(context).width;
+    final contentW = screenW - 16;
     final isTop = placement == 'top';
-    final adminTopH = isTop
-        ? ref.watch(homeTopBannerHeightProvider).valueOrNull
-        : null;
     final ratio = isTop
         ? PromoBannerCarousel.topAspectRatio
         : PromoBannerCarousel.midFeedAspectRatio;
-    final bannerH = isTop && adminTopH != null
-        ? adminTopH.toDouble()
+    final bannerH = isTop
+        ? refTopHeight * screenW / refDesignWidth
         : PromoBannerCarousel.heightForWidth(
             contentW,
             ratio: ratio,
@@ -36,6 +47,9 @@ class HomePartyBannerSlider extends ConsumerWidget {
             maxH: isTop ? 200 : 180,
           );
     final transformW = isTop ? 1280 : 960;
+    // Crop server-side to the actual on-screen aspect ratio instead of
+    // decoding the source image's full (often much taller) aspect ratio.
+    final transformH = (transformW / ratio).round();
 
     return bannersAsync.when(
       skipLoadingOnReload: true,
@@ -48,17 +62,24 @@ class HomePartyBannerSlider extends ConsumerWidget {
             bottom: placement == 'after_rooms' ? 8 : 0,
           ),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: AppColors.cardShadow,
+            borderRadius: BorderRadius.circular(
+              isTop ? refTopRadius * screenW / refDesignWidth : 16,
+            ),
+            boxShadow: isTop ? null : AppColors.cardShadow,
           ),
           child: PromoBannerCarousel(
             banners: banners,
             height: bannerH,
             aspectRatio: ratio,
-            borderRadius: 16,
-            backgroundColor: AppColors.primaryUltraLight,
+            borderRadius: isTop ? refTopRadius * screenW / refDesignWidth : 16,
+            backgroundColor: isTop
+                ? Colors.transparent
+                : AppColors.primaryUltraLight,
             transformWidth: transformW,
+            transformHeight: transformH,
+            active: active,
             onBannerTap: onBannerTap,
+            onPageChanged: onPageChanged,
             placeholder: (context, url) => _shimmer(bannerH),
             errorBuilder: (context, url, error) => Container(
               color: AppColors.primaryUltraLight,

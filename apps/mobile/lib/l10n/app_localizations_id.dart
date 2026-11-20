@@ -233,6 +233,9 @@ class AppLocalizationsId extends AppLocalizations {
   String get profile_resellerPanel => 'Panel Pengecer';
 
   @override
+  String get profile_merchantPanel => 'Panel Merchant';
+
+  @override
   String get profile_accountManagement => 'Manajemen Akun';
 
   @override
@@ -298,6 +301,15 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get auth_completeProfileTitle => 'Lengkapi profil Anda';
+
+  @override
+  String get auth_selectGender => 'Pilih jenis kelamin';
+
+  @override
+  String get auth_genderMale => 'Laki-laki';
+
+  @override
+  String get auth_genderFemale => 'Perempuan';
 
   @override
   String get auth_nickname => 'Nama panggilan';
@@ -622,6 +634,30 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get party_tabRoom => 'Ruang';
+
+  @override
+  String get party_tabEvent => 'Acara';
+
+  @override
+  String get profile_coin => 'Koin';
+
+  @override
+  String get home_selectCountry => 'Pilih negara';
+
+  @override
+  String get home_regionMiddleEast => 'Timur Tengah';
+
+  @override
+  String get home_regionAsia => 'Asia';
+
+  @override
+  String get home_regionAmerica => 'Amerika';
+
+  @override
+  String get home_regionEurope => 'Eropa';
+
+  @override
+  String get home_regionAfrica => 'Afrika';
 
   @override
   String get party_tooltipRanking => 'Peringkat';
@@ -1631,4 +1667,12 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get chat_blockedCannotMessage =>
       'You cannot send or receive messages in this chat.';
+
+  @override
+  String get topBanner_leaveRoomConfirm =>
+      'Apakah Anda yakin ingin meninggalkan room ini?';
+
+  @override
+  String get topBanner_enterRoomConfirm =>
+      'Apakah Anda ingin masuk ke room ini?';
 }

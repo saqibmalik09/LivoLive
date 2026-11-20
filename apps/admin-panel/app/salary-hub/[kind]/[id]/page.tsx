@@ -2,7 +2,13 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { ArrowLeft, Building2, Network, Users, Wallet, Banknote } from "lucide-react";
-import { getStaffDrilldown, ROLE_LABELS } from "@/lib/salary-hub/queries";
+import {
+  getStaffDrilldown,
+  getStaffDrilldownMonthly,
+  getStaffDrilldownWholeMonth,
+  resolveBdPeriodId,
+  ROLE_LABELS,
+} from "@/lib/salary-hub/queries";
 import { AmountValue } from "@/components/AmountValue";
 import { HubPeriodBanner } from "@/components/HubPeriodBanner";
 import { withPeriod } from "@/lib/salary-hub/constants";
@@ -27,8 +33,28 @@ export default async function SalaryHubDrillPage({
     redirect(withPeriod(`/agencies/${id}`, period));
   }
   if (kind !== "staff") notFound();
-  const data = await getStaffDrilldown(id, period);
+  let data = await getStaffDrilldown(id, period);
   if (!data) notFound();
+  let displayPeriod = period;
+  if (data.staff.role === "bd") {
+    const bdPeriod = await resolveBdPeriodId(period);
+    if (bdPeriod.endsWith("-M") && bdPeriod !== period) {
+      const monthly = await getStaffDrilldownMonthly(id, bdPeriod);
+      if (monthly) {
+        data = monthly;
+        displayPeriod = bdPeriod;
+      }
+    }
+  }
+  if (data.staff.role === "super_bd") {
+    const monthPeriod = `${period.slice(0, 7)}-M`;
+    const monthly = await getStaffDrilldownWholeMonth(id, monthPeriod);
+    if (monthly) {
+      data = monthly;
+      displayPeriod = monthPeriod;
+    }
+  }
+  const hostsPeriod = data.staff.role === "super_bd" ? displayPeriod : period;
   const { staff, parent, countyAdmins, bds, agencies, hosts, totals } = data;
   return (
     <div className="space-y-10 pb-32">
@@ -41,7 +67,7 @@ export default async function SalaryHubDrillPage({
       </Link>
 
       <HubPeriodBanner
-        period={period}
+        period={displayPeriod}
         hubHref={`/salary-hub?role=${staff.role}&period=${period}`}
       />
 
@@ -163,7 +189,7 @@ export default async function SalaryHubDrillPage({
         )}
       </Section>
 
-      <Section title={`Hosts · ${period}`} count={hosts.length}>
+      <Section title={`Hosts · ${hostsPeriod}`} count={hosts.length}>
         {hosts.slice(0, 100).map((h) => (
           <Link
             key={`${h.agency_id}-${h.user_id}`}

@@ -32,6 +32,64 @@ class LiveKitVoiceEngine implements VoiceEngine {
   void Function(String reason)? _onTransportLost;
   void Function(Map<String, double> levels)? _onSpeakerLevels;
 
+  /// Plugging a headset in **during** a call used to change nothing: the route
+  /// was only re-evaluated on join, on an audio-session switch, and when the
+  /// speaker button was pressed. Whatever was decided at join time — with no
+  /// headset present that is a *forced* speaker — stayed selected, so the
+  /// audio kept coming out of the loudspeaker and never reached the headset.
+  ///
+  /// Watch the device list instead, so connecting or removing a headset
+  /// re-runs the same routing decision immediately.
+  StreamSubscription<List<lk.MediaDevice>>? _deviceChangeSub;
+
+  /// Device-change events arrive in bursts while a headset settles (several
+  /// within a few hundred ms), and each re-assert does two routing calls with
+  /// a delay between them. Coalesce the burst into one re-assert.
+  Timer? _deviceChangeDebounce;
+  String _lastDeviceSignature = '';
+
+  void _startDeviceChangeWatch() {
+    if (_deviceChangeSub != null) return;
+    try {
+      _deviceChangeSub = lk.Hardware.instance.onDeviceChange.stream.listen(
+        (devices) {
+          // Only react when the set of OUTPUTS actually changed; the stream
+          // also fires for microphone changes, which must not re-route audio.
+          final signature = devices
+              .where((d) => d.kind == 'audiooutput')
+              .map((d) => d.label)
+              .toList()
+            ..sort();
+          final joined = signature.join('|');
+          if (joined == _lastDeviceSignature) return;
+          _lastDeviceSignature = joined;
+
+          _deviceChangeDebounce?.cancel();
+          _deviceChangeDebounce = Timer(
+            const Duration(milliseconds: 250),
+            () {
+              debugPrint('[LK] audio devices changed -> $joined');
+              _reassertSpeakerRoute();
+            },
+          );
+        },
+        onError: (Object e) =>
+            debugPrint('[LK] device change stream error: $e'),
+      );
+      debugPrint('[LK] watching audio device changes');
+    } catch (e) {
+      debugPrint('[LK] could not watch device changes: $e');
+    }
+  }
+
+  void _stopDeviceChangeWatch() {
+    _deviceChangeDebounce?.cancel();
+    _deviceChangeDebounce = null;
+    _deviceChangeSub?.cancel();
+    _deviceChangeSub = null;
+    _lastDeviceSignature = '';
+  }
+
   /// Identities reported as speaking on the previous event, so we can send an
   /// explicit zero when they stop. The UI ignores an empty map, so silence has
   /// to be signalled per-identity or the wave would stay stuck on.
@@ -162,7 +220,9 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _appRoomId = session.appRoomId ?? session.orbitRoomId;
 
     await room.connect(session.livekitUrl, session.token);
-    await lk.Hardware.instance.setSpeakerphoneOn(_speakerOn);
+    await _reassertSpeakerRoute();
+    // From here a headset plugged in mid-call re-routes straight away.
+    _startDeviceChangeWatch();
 
     // The token's grant is authoritative; only publish if the server allowed it.
     if (_micIntent && canPublishNow) {
@@ -175,6 +235,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
   @override
   Future<void> logoutRoom() async {
+    _stopDeviceChangeWatch();
     final room = _room;
     final events = _events;
     _room = null;
@@ -215,13 +276,144 @@ class LiveKitVoiceEngine implements VoiceEngine {
       return false;
     }
     try {
+      // Playout is initialised with media attributes so listening is at media
+      // volume rather than the much quieter call stream. Capture still wants
+      // communication mode for echo cancellation, so move the session there
+      // only while the microphone is actually live.
+      await _applyAudioSessionFor(publishing: enabled);
       await local.setMicrophoneEnabled(enabled);
+      // Only once the mic has settled. Communication mode hands routing back
+      // to Android, which defaults to the earpiece, so the user's speaker
+      // choice has to be re-applied — but doing it mid-transition risks the
+      // session itself, so it happens strictly after.
+      await _reassertSpeakerRoute();
+      // AudioSwitch can re-select a device moments after capture starts, which
+      // would silently put the room back on the earpiece. Settle it again once
+      // the stack has stopped moving.
+      if (enabled) {
+        // Two passes, because AudioSwitch settles in stages: it re-selects once
+        // shortly after capture starts, and again a couple of seconds later
+        // when the device list stabilises. A single 600ms pass covered only the
+        // first, which is why a headset kept its audio for 2-3 seconds and then
+        // lost it to the speaker.
+        for (final ms in const [600, 1500, 2800]) {
+          unawaited(
+            Future<void>.delayed(
+              Duration(milliseconds: ms),
+              _reassertSpeakerRoute,
+            ),
+          );
+        }
+      }
       return hasLiveMicTrack == enabled;
     } catch (e) {
       debugPrint('[LK] setMicEnabled($enabled): $e');
       return false;
     }
   }
+
+  bool? _sessionPublishing;
+
+  Future<void> _applyAudioSessionFor({required bool publishing}) async {
+    if (_sessionPublishing == publishing) return;
+    try {
+      await lk.AudioManager.instance.setAudioSessionOptions(
+        publishing
+            ? const lk.AudioSessionOptions.communication()
+            : const lk.AudioSessionOptions.mediaPlayback(),
+      );
+      _sessionPublishing = publishing;
+    } catch (e) {
+      // Losing the preferred mode must never stop the mic from toggling.
+      debugPrint('[LK] audio session switch failed (publishing=$publishing): $e');
+    }
+  }
+
+  /// Re-apply the user's speaker choice after an audio session change.
+  ///
+  /// Android routes communication-mode audio through AudioSwitch, whose
+  /// device priority is Bluetooth → wired headset → **earpiece** →
+  /// speakerphone. The earpiece outranks the speaker, so an unforced
+  /// preference loses and the room is heard from the receiver the moment the
+  /// mic goes live. Forcing is the only way to win that choice, so force —
+  /// but only when no headset is connected, because forcing would otherwise
+  /// yank audio out of the user's headphones.
+  Future<void> _reassertSpeakerRoute() async {
+    try {
+      final labels = await _audioOutputLabels();
+      final headset = labels.any(_isHeadsetLabel);
+
+      // AudioSwitch picks the first available device from a preferred list,
+      // and only the FORCED list puts the speaker ahead of the earpiece:
+      //   forced     -> [Speakerphone, Bluetooth, Wired, Earpiece]
+      //   preferred  -> [Bluetooth, Wired, Speakerphone, Earpiece]
+      //   neither    -> [Bluetooth, Wired, Earpiece, Speakerphone]
+      //
+      // Speaker ON therefore has to force, unconditionally. Making this
+      // conditional on headset detection meant one wrong reading silently
+      // disabled the fix and the room went back to the earpiece — which is
+      // exactly what kept happening. Speaker OFF uses the unforced list,
+      // where a headset still wins and the earpiece is the fallback, so
+      // headphone users have a working route via the speaker toggle.
+      // Force only when there is no headset. Forcing puts Speakerphone first
+      // and would otherwise rip audio out of someone's headphones; unforced
+      // still ranks a headset above the speaker and the earpiece below it.
+      // The flip below is what makes either choice actually take effect.
+      // With a headset connected, do not ask for the loudspeaker at all.
+      //
+      // Passing `_speakerOn` straight through still reached
+      // Native.setAndroidSpeakerphoneOn(true, force: false) — i.e. "speakerphone
+      // on, just don't force it". AudioSwitch honours that the moment it
+      // re-sorts devices, a couple of seconds after capture starts, which is
+      // why audio played through the headset for 2-3 seconds and then jumped
+      // back to the speaker. The user's speaker preference is remembered in
+      // `_speakerOn` and comes back the instant the headset is unplugged.
+      final wantSpeaker = _speakerOn && !headset;
+      final force = wantSpeaker;
+
+      // AudioSwitch.setPreferredDeviceList returns immediately when the list
+      // it is handed equals the one already held — verified in its bytecode:
+      //     areEqual -> ifeq -> return
+      // So re-requesting the same routing after unmuting did nothing at all,
+      // and whichever device was picked during the session switch (the
+      // earpiece) stayed selected. Handing it a DIFFERENT list first makes
+      // the real call re-sort the devices and re-select, which is precisely
+      // what toggling the output device by hand does.
+      await lk.AudioManager.instance.setSpeakerOutputPreferred(!wantSpeaker);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await lk.AudioManager.instance.setSpeakerOutputPreferred(
+        wantSpeaker,
+        force: force,
+      );
+      debugPrint(
+        '[LK] speaker route: pref=$wantSpeaker (toggle=$_speakerOn) '
+        'headset=$headset force=$force devices=$labels',
+      );
+    } catch (e) {
+      debugPrint('[LK] speaker route re-assert failed: $e');
+    }
+  }
+
+  /// Labels of the audio outputs LiveKit currently reports.
+  Future<List<String>> _audioOutputLabels() async {
+    try {
+      final outputs = await lk.Hardware.instance.audioOutputs();
+      return outputs.map((d) => d.label).toList(growable: false);
+    } catch (e) {
+      debugPrint('[LK] audioOutputs lookup failed: $e');
+      return const [];
+    }
+  }
+
+  static bool _isHeadsetLabel(String raw) {
+    final l = raw.toLowerCase();
+    return l.contains('bluetooth') ||
+        l.contains('headset') ||
+        l.contains('headphone') ||
+        l.contains('wired') ||
+        l.contains('usb');
+  }
+
 
   @override
   Future<void> primeMicIfNeeded() async {}
@@ -265,18 +457,14 @@ class LiveKitVoiceEngine implements VoiceEngine {
   @override
   Future<void> setSpeakerOn(bool on) async {
     _speakerOn = on;
-    try {
-      await lk.Hardware.instance.setSpeakerphoneOn(on);
-    } catch (e) {
-      debugPrint('[LK] setSpeakerOn($on): $e');
-    }
+    await _reassertSpeakerRoute();
   }
 
   @override
   Future<void> reassertRemoteHearing(String reason) async {
     if (!isConnected) return;
     await setRemoteAudioMuted(_remoteMuted);
-    await lk.Hardware.instance.setSpeakerphoneOn(_speakerOn);
+    await _reassertSpeakerRoute();
   }
 
   // ------------------------------------------------------------------ exit

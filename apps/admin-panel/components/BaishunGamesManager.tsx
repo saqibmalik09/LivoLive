@@ -5,13 +5,27 @@ import {
   addBaishunGame,
   rehostBaishunGameIcon,
   syncBaishunGamelist,
+  setGameTestUrl,
   updateBaishunGame,
   uploadBaishunGameIcon,
   type BaishunGameRow,
 } from "@/app/settings/baishun-games/actions";
+import { searchUsersForGameAudience } from "@/app/settings/game-control/actions";
 import type { RoomGameCategoryRow } from "@/app/settings/game-control/actions";
 import { GameAudienceButton } from "@/components/GameAudiencePanel";
-import { ImagePlus, Loader2, Plus, RefreshCw, Save, Upload } from "lucide-react";
+import {
+  FlaskConical,
+  ImagePlus,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  Upload,
+  X,
+} from "lucide-react";
+
+type Tester = { id: string; username: string | null; short_id: number | null };
 export function BaishunGamesManager({
   games: initialGames,
   categories = [],
@@ -427,6 +441,10 @@ export function BaishunGamesManager({
                     onChange={(e) => patch(game.id, { game_url: e.target.value })}
                   />
                 </label>
+                <TestUrlPanel
+                  game={game}
+                  onSaved={(p) => patch(game.id, p)}
+                />
                 <label className="text-xs text-white/50 md:col-span-2">
                   Icon URL
                   <div className="mt-1 flex gap-2">
@@ -525,6 +543,145 @@ export function BaishunGamesManager({
           ))
         )}
       </section>
+    </div>
+  );
+}
+
+function TestUrlPanel({
+  game,
+  onSaved,
+}: {
+  game: BaishunGameRow;
+  onSaved: (patch: Partial<BaishunGameRow>) => void;
+}) {
+  const [url, setUrl] = useState(game.test_game_url ?? "");
+  const [testers, setTesters] = useState<Tester[]>([]);
+  const [loadedIds, setLoadedIds] = useState(game.test_user_ids ?? []);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  const live = Boolean((game.test_game_url ?? "").trim()) && (game.test_user_ids ?? []).length > 0;
+
+  async function find() {
+    if (!query.trim()) return;
+    setBusy(true);
+    const res = await searchUsersForGameAudience(query);
+    setBusy(false);
+    if (!res.success) return setNote(res.error ?? "Search failed");
+    const found = (res.users ?? []).map((u: any) => ({
+      id: String(u.id),
+      username: u.username as string | null,
+      short_id: u.short_id as number | null,
+    }));
+    if (found.length === 0) return setNote("No user found");
+    const picked = found[0];
+    if (loadedIds.includes(picked.id)) return setNote("Already a tester");
+    setTesters((t) => [...t, picked]);
+    setLoadedIds((ids) => [...ids, picked.id]);
+    setQuery("");
+    setNote("");
+  }
+
+  function drop(id: string) {
+    setTesters((t) => t.filter((x) => x.id !== id));
+    setLoadedIds((ids) => ids.filter((x) => x !== id));
+  }
+
+  async function save() {
+    setBusy(true);
+    const res = await setGameTestUrl({
+      id: game.id,
+      test_game_url: url.trim() || null,
+      test_user_ids: loadedIds,
+    });
+    setBusy(false);
+    if (!res.success) return setNote(res.error ?? "Save failed");
+    onSaved({ test_game_url: url.trim() || null, test_user_ids: loadedIds });
+    setNote(
+      res.active
+        ? `Live for ${res.testers} tester${res.testers === 1 ? "" : "s"} — everyone else is unaffected`
+        : "Override off — everyone loads the normal URL",
+    );
+  }
+
+  return (
+    <div className="md:col-span-2 rounded-xl border border-sky-400/20 bg-sky-500/5 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <FlaskConical size={14} className="text-sky-300" />
+        <span className="text-[10px] font-black uppercase tracking-widest text-sky-300">
+          Test URL
+        </span>
+        <span
+          className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+            live ? "bg-sky-500/20 text-sky-200" : "bg-white/5 text-white/40"
+          }`}
+        >
+          {live ? "ACTIVE FOR TESTERS" : "OFF"}
+        </span>
+      </div>
+      <p className="text-[11px] text-white/40">
+        Only the people listed here load this URL. Everyone else keeps the normal
+        Game URL, so a broken link cannot affect live players.
+      </p>
+      <input
+        className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm font-mono"
+        placeholder="https://… candidate package URL"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+      />
+      <div className="flex gap-2">
+        <input
+          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm"
+          placeholder="Add tester by username or ID"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void find();
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void find()}
+          disabled={busy}
+          className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50"
+        >
+          <Search size={15} />
+        </button>
+      </div>
+      {loadedIds.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {loadedIds.map((id) => {
+            const t = testers.find((x) => x.id === id);
+            return (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1.5 text-[11px] bg-white/10 border border-white/10 rounded-lg px-2 py-1"
+              >
+                {t ? t.username ?? `ID ${t.short_id ?? "?"}` : `${id.slice(0, 8)}…`}
+                <button type="button" onClick={() => drop(id)} className="text-white/40 hover:text-rose-300">
+                  <X size={11} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={busy}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-500 text-black font-bold text-xs disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+          Save test URL
+        </button>
+        {note && <span className="text-[11px] text-white/50">{note}</span>}
+      </div>
     </div>
   );
 }

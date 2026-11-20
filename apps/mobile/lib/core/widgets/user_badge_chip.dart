@@ -1,5 +1,5 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:sk_live/core/widgets/app_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sk_live/core/providers/profile_provider.dart';
 import 'package:sk_live/core/router/navigation_utils.dart';
@@ -63,7 +63,13 @@ class UserBadgeChip extends ConsumerWidget {
 
     final isTitleOrMedal = badge.type == 'title' || badge.type == 'medal';
 
-    final image = CachedNetworkImage(
+    // Through the storage transform, and via AppNetworkImage so a transform
+    // miss falls back to the original rather than vanishing. These draw at
+    // 12-20px but were fetched at full authored resolution, so on a slow link
+    // a profile's tags arrived long after the rest of the sheet — or not at
+    // all, because the old errorWidget rendered an empty box and a badge that
+    // failed to load was simply invisible.
+    final image = AppNetworkImage(
       imageUrl: url,
       height: imageHeight,
       fit: BoxFit.contain,

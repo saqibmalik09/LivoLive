@@ -21,6 +21,51 @@ export async function updateAgencySalaryLevel(formData: FormData) {
   if (error) throw new Error(error.message);
   revalidatePath("/settings/bd-center");
 }
+function readLevelAmount(formData: FormData, field: string): number {
+  const raw = String(formData.get(field) ?? "").trim();
+  const value = Number(raw);
+  if (raw === "" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${field}: enter a number (0 or more)`);
+  }
+  return value;
+}
+async function nextLevel(table: "agency_salary_level_configs" | "bd_level_configs") {
+  const { data, error } = await supabaseAdmin
+    .from(table)
+    .select("level")
+    .order("level", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Number(data?.level ?? 0) + 1;
+}
+export async function addAgencySalaryLevel(formData: FormData) {
+  const charm_target = readLevelAmount(formData, "charm_target");
+  const charm_salary_usd = readLevelAmount(formData, "charm_salary_usd");
+  const agent_salary_usd = readLevelAmount(formData, "agent_salary_usd");
+  const level = await nextLevel("agency_salary_level_configs");
+  const { error } = await supabaseAdmin
+    .from("agency_salary_level_configs")
+    .insert({ level, charm_target, charm_salary_usd, agent_salary_usd });
+  if (error) throw new Error(error.message);
+  revalidatePath("/settings/bd-center");
+}
+export async function addBdLevel(formData: FormData) {
+  const agency_target_usd = readLevelAmount(formData, "agency_target_usd");
+  const basic_salary_usd = readLevelAmount(formData, "basic_salary_usd");
+  const commission_usd = readLevelAmount(formData, "commission_usd");
+  const new_bd_commission_usd = readLevelAmount(formData, "new_bd_commission_usd");
+  const level = await nextLevel("bd_level_configs");
+  const { error } = await supabaseAdmin.from("bd_level_configs").insert({
+    level,
+    agency_target_usd,
+    basic_salary_usd,
+    commission_usd,
+    new_bd_commission_usd,
+  });
+  if (error) throw new Error(error.message);
+  revalidatePath("/settings/bd-center");
+}
 export async function listBdLevels() {
   const { data, error } = await supabaseAdmin
     .from("bd_level_configs")
@@ -97,8 +142,11 @@ export async function executeAgencyPeriodPayout(formData: FormData) {
   return data;
 }
 export async function executeBdMonthlyPayout(formData: FormData) {
-  const period = String(formData.get("period_yyyy_mm") || "").trim();
-  if (!period) throw new Error("period required");
+  const raw = String(formData.get("period_yyyy_mm") || "").trim();
+  if (!raw) throw new Error("period required");
+  const month = raw.slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`Invalid BD period: ${raw}`);
+  const period = `${month}-M`;
   const { data, error } = await supabaseAdmin.rpc("execute_bd_monthly_payout", {
     p_period_yyyy_mm: period,
   });

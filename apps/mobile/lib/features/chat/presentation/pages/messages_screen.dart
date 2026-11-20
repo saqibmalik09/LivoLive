@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +17,9 @@ import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/core/widgets/live_in_room_badge.dart';
 import 'package:sk_live/features/chat/presentation/widgets/message_category_icons.dart';
 import 'package:sk_live/features/chat/presentation/widgets/message_flow_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_background.dart';
+import 'package:sk_live/features/home/presentation/widgets/home_ref_tab_bar.dart';
+import 'package:sk_live/features/home/presentation/widgets/party_ref_widgets.dart';
 import 'package:sk_live/features/home/services/room_lock_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/util/silent_connection_error.dart';
@@ -55,6 +59,8 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
     _tabController.dispose();
     super.dispose();
   }
+
+  double _s(BuildContext context) => MediaQuery.sizeOf(context).width / 750;
 
   @override
   Widget build(BuildContext context) {
@@ -107,27 +113,11 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
                   );
                 },
               )
-            : TabBar(
+            : HomeRefTabBar(
                 controller: _tabController,
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                indicatorColor: AppColors.accent,
-                indicatorWeight: 3,
-                indicatorSize: TabBarIndicatorSize.label,
-                labelColor: AppColors.accent,
-                unselectedLabelColor: AppColors.textPrimary,
-                dividerColor: Colors.transparent,
-                labelStyle: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-                unselectedLabelStyle: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.normal,
-                ),
-                tabs: [
-                  Tab(text: context.l10n.messages_tabMessage),
-                  Tab(text: context.l10n.messages_tabContacts),
+                labels: [
+                  context.l10n.messages_tabMessage,
+                  context.l10n.messages_tabContacts,
                 ],
               ),
         centerTitle: false,
@@ -135,18 +125,29 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
           if (!_isSearching && _tabController.index == 0)
             IconButton(
               onPressed: () => setState(() => _isSearching = true),
-              icon: const Icon(
-                Iconsax.search_normal,
-                color: AppColors.accent,
-                size: 24,
+              icon: HomeRefTabBar.rowIcon(
+                context,
+                Image.asset(
+                  'assets/design/home/top_search_gold.webp',
+                  width: 26,
+                  height: 26,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
             ),
+          SizedBox(width: math.max(0, 68 * _s(context) - 24)),
         ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const MessageFlowBackground(),
+          const HomeRefBackground(
+            tabKey: 'message',
+            headerBottom: 150,
+            fadeEnd: 210,
+            dragonFadeFrom: 140,
+          ),
           Column(
             children: [
               SizedBox(height: topInset),
@@ -316,57 +317,97 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
     }
 
     return ListView.builder(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        homeTabScrollBottomPadding(context),
+      padding: EdgeInsets.only(
+        top: 36 * _s(context),
+        bottom: homeTabScrollBottomPadding(context),
       ),
       itemCount: users.length,
-      itemBuilder: (context, index) {
-        final user = users[index];
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+      itemBuilder: (context, index) => _refUserRow(users[index]),
+    );
+  }
+
+  Widget _refUserRow(Map<String, dynamic> user) {
+    final s = _s(context);
+    final avatarUrl = user['avatar_url'];
+    return InkWell(
+      onTap: () => _openChatWithUser(user),
+      child: Padding(
+        padding: EdgeInsets.only(left: 28 * s, right: 28 * s, bottom: 39 * s),
+        child: SizedBox(
+          height: 104 * s,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipOval(
+                child: SizedBox.square(
+                  dimension: 104 * s,
+                  child: avatarUrl != null
+                      ? CachedNetworkImage(
+                          imageUrl: avatarUrl,
+                          fit: BoxFit.cover,
+                          memCacheWidth: 200,
+                          placeholder: (_, _) => const ColoredBox(
+                            color: AppColors.primaryUltraLight,
+                          ),
+                          errorWidget: (_, _, _) => const ColoredBox(
+                            color: AppColors.primaryUltraLight,
+                            child: Icon(Iconsax.user, color: AppColors.accent),
+                          ),
+                        )
+                      : const ColoredBox(
+                          color: AppColors.primaryUltraLight,
+                          child: Icon(Iconsax.user, color: AppColors.accent),
+                        ),
+                ),
+              ),
+              SizedBox(width: 15 * s),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(height: 16.5 * s),
+                    Text(
+                      user['username'] ?? 'User',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 28 * s,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
+                    ),
+                    SizedBox(height: 1 * s),
+                    Text(
+                      'Level ${user['user_level'] ?? 1}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: const Color(0xFF6B6B6B),
+                        fontSize: 26 * s,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: 12 * s),
+              Padding(
+                padding: EdgeInsets.only(top: 28 * s),
+                child: GestureDetector(
+                  onTap: () => _openChatWithUser(user),
+                  child: Image.asset(
+                    'assets/design/message/btn_chat_pill.webp',
+                    width: 97 * s,
+                    height: 49 * s,
+                    fit: BoxFit.contain,
+                  ),
+                ),
               ),
             ],
           ),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 4,
-            ),
-            leading: CircleAvatar(
-              radius: 24,
-              backgroundColor: AppColors.primaryUltraLight,
-              backgroundImage: user['avatar_url'] != null
-                  ? CachedNetworkImageProvider(user['avatar_url'])
-                  : null,
-              child: user['avatar_url'] == null
-                  ? const Icon(Iconsax.user, color: AppColors.accent)
-                  : null,
-            ),
-            title: Text(
-              user['username'] ?? 'User',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text('Level ${user['user_level'] ?? 1}'),
-            trailing: const Icon(
-              Iconsax.message,
-              color: AppColors.accent,
-              size: 20,
-            ),
-            onTap: () => _openChatWithUser(user),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -420,64 +461,12 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
         }
 
         return ListView.builder(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            12,
-            16,
-            homeTabScrollBottomPadding(context),
+          padding: EdgeInsets.only(
+            top: 41 * _s(context),
+            bottom: homeTabScrollBottomPadding(context),
           ),
           itemCount: users.length,
-          itemBuilder: (context, index) {
-            final user = users[index];
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                leading: CircleAvatar(
-                  radius: 25,
-                  backgroundColor: AppColors.primaryUltraLight,
-                  backgroundImage: user['avatar_url'] != null
-                      ? CachedNetworkImageProvider(user['avatar_url'])
-                      : null,
-                  child: user['avatar_url'] == null
-                      ? const Icon(Iconsax.user, color: AppColors.accent)
-                      : null,
-                ),
-                title: Text(
-                  user['username'] ?? 'User',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text('Level ${user['user_level'] ?? 1}'),
-                trailing: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Iconsax.message,
-                    color: AppColors.accent,
-                    size: 20,
-                  ),
-                ),
-                onTap: () => _openChatWithUser(user),
-              ),
-            );
-          },
+          itemBuilder: (context, index) => _refUserRow(users[index]),
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -487,12 +476,7 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
 
   Widget _buildConversationList(List<Map<String, dynamic>> rooms) {
     return ListView.builder(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        homeTabScrollBottomPadding(context),
-      ),
+      padding: EdgeInsets.only(bottom: homeTabScrollBottomPadding(context)),
       itemCount: rooms.length,
       itemBuilder: (context, index) {
         final room = rooms[index];
@@ -505,218 +489,188 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen>
             ? DateTime.parse(room['last_message_at'])
             : null;
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
+        final s = _s(context);
+        final avatarUrl = otherUser?['avatar_url'];
+        final unreadPill = Container(
+          constraints: BoxConstraints(minWidth: 36 * s, minHeight: 26 * s),
+          padding: EdgeInsets.symmetric(horizontal: 7 * s),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: (unreadCount > 0 ? AppColors.gold : Colors.black)
-                    .withValues(alpha: 0.06),
-                blurRadius: 15,
-                offset: const Offset(0, 6),
-              ),
-            ],
-            border: unreadCount > 0
-                ? Border.all(
-                    color: AppColors.gold.withValues(alpha: 0.3),
-                    width: 1.5,
-                  )
-                : Border.all(color: Colors.white, width: 1.5),
+            color: const Color(0xFFF4797B),
+            borderRadius: BorderRadius.circular(13 * s),
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () {
-                  if (otherUser != null) {
-                    ChatService.markAsRead(room['id']);
-                    context.push(
-                      AppRouter.chat,
-                      extra: {
-                        'conversationId': room['id'],
-                        'targetUsername': otherUser['username'],
-                        'targetAvatar': otherUser['avatar_url'],
-                        'targetUserId': otherUser['id'],
-                      },
-                    );
-                  }
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      Stack(
-                        children: [
-                          AvatarWithLiveRoomBadge(
-                            activeRoom: activeRoom,
-                            avatar: Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: unreadCount > 0
-                                    ? const LinearGradient(
-                                        colors: [
-                                          AppColors.gold,
-                                          Color(0xFFFFE082),
-                                        ],
-                                      )
-                                    : LinearGradient(
-                                        colors: [
-                                          Colors.grey.shade300,
-                                          Colors.grey.shade100,
-                                        ],
+          child: Text(
+            unreadCount > 99 ? '99+' : unreadCount.toString(),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20 * s,
+              fontWeight: FontWeight.w500,
+              height: 1.1,
+            ),
+          ),
+        );
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              if (otherUser != null) {
+                ChatService.markAsRead(room['id']);
+                context.push(
+                  AppRouter.chat,
+                  extra: {
+                    'conversationId': room['id'],
+                    'targetUsername': otherUser['username'],
+                    'targetAvatar': otherUser['avatar_url'],
+                    'targetUserId': otherUser['id'],
+                  },
+                );
+              }
+            },
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 31 * s,
+                right: 29 * s,
+                bottom: 43 * s,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox.square(
+                    dimension: 100 * s,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        AvatarWithLiveRoomBadge(
+                          activeRoom: activeRoom,
+                          avatar: ClipOval(
+                            child: SizedBox.square(
+                              dimension: 100 * s,
+                              child: avatarUrl != null
+                                  ? CachedNetworkImage(
+                                      imageUrl: avatarUrl,
+                                      fit: BoxFit.cover,
+                                      memCacheWidth: 200,
+                                      placeholder: (_, _) => const ColoredBox(
+                                        color: AppColors.primaryUltraLight,
                                       ),
-                              ),
-                              child: CircleAvatar(
-                                radius: 32,
-                                backgroundColor: Colors.white,
-                                child: CircleAvatar(
-                                  radius: 30,
-                                  backgroundColor: AppColors.primaryUltraLight,
-                                  backgroundImage:
-                                      otherUser?['avatar_url'] != null
-                                      ? CachedNetworkImageProvider(
-                                          otherUser!['avatar_url'],
-                                        )
-                                      : null,
-                                  child: otherUser?['avatar_url'] == null
-                                      ? const Icon(
-                                          Iconsax.user,
-                                          color: AppColors.primary,
-                                          size: 28,
-                                        )
-                                      : null,
+                                      errorWidget: (_, _, _) =>
+                                          const ColoredBox(
+                                            color: AppColors.primaryUltraLight,
+                                            child: Icon(
+                                              Iconsax.user,
+                                              color: AppColors.primary,
+                                            ),
+                                          ),
+                                    )
+                                  : const ColoredBox(
+                                      color: AppColors.primaryUltraLight,
+                                      child: Icon(
+                                        Iconsax.user,
+                                        color: AppColors.primary,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ),
+                        if (otherUser?['is_online'] == true &&
+                            activeRoom == null)
+                          Positioned(
+                            right: 4 * s,
+                            bottom: 4 * s,
+                            child: Container(
+                              width: 22 * s,
+                              height: 22 * s,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF4CAF50),
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 3 * s,
                                 ),
+                                shape: BoxShape.circle,
                               ),
                             ),
                           ),
-                          if (otherUser?['is_online'] == true &&
-                              activeRoom == null)
-                            Positioned(
-                              right: 4,
-                              bottom: 4,
-                              child: Container(
-                                width: 14,
-                                height: 14,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF4CAF50),
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 2.5,
-                                  ),
-                                  shape: BoxShape.circle,
+                        if (unreadCount > 0)
+                          Positioned(
+                            left: 61 * s,
+                            top: activeRoom == null ? 3 * s : 71 * s,
+                            child: unreadPill,
+                          ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: 17 * s),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(height: 20 * s),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                otherUser?['username'] ?? 'User',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 26 * s,
+                                  color: const Color(0xFF1A1A1A),
+                                  height: 1.2,
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                        ],
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    otherUser?['username'] ?? 'User',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 17,
-                                      color: unreadCount > 0
-                                          ? AppColors.primary
-                                          : AppColors.textPrimary,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (lastMsgTime != null)
-                                  Text(
-                                    _formatTime(lastMsgTime),
-                                    style: TextStyle(
-                                      color: unreadCount > 0
-                                          ? AppColors.gold
-                                          : AppColors.textHint,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            if (activeRoom != null) ...[
-                              const SizedBox(height: 6),
-                              GestureDetector(
-                                onTap: () {
-                                  openRoomLive(
-                                    context,
-                                    Map<String, dynamic>.from(activeRoom),
-                                  );
-                                },
-                                child: Text(
-                                  context.l10n.messages_inRoom(
-                                    activeRoom['title'] ?? 'Room',
-                                  ),
-                                  style: const TextStyle(
-                                    color: AppColors.accent,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                            if (lastMsgTime != null) ...[
+                              SizedBox(width: 12 * s),
+                              Text(
+                                _formatTime(lastMsgTime),
+                                style: TextStyle(
+                                  color: const Color(0xFF6B6B6B),
+                                  fontSize: 21 * s,
+                                  height: 1.2,
                                 ),
                               ),
                             ],
-                            const SizedBox(height: 6),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    _getMessagePreview(lastMsg),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: unreadCount > 0
-                                          ? AppColors.textPrimary
-                                          : const Color(0xFF888888),
-                                      fontWeight: unreadCount > 0
-                                          ? FontWeight.w600
-                                          : FontWeight.normal,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ),
-                                if (unreadCount > 0)
-                                  Container(
-                                    margin: const EdgeInsets.only(left: 8),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 7,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.accent,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      unreadCount.toString(),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
                           ],
                         ),
-                      ),
-                    ],
+                        if (activeRoom != null)
+                          GestureDetector(
+                            onTap: () {
+                              openRoomLive(
+                                context,
+                                Map<String, dynamic>.from(activeRoom),
+                              );
+                            },
+                            child: Text(
+                              context.l10n.messages_inRoom(
+                                activeRoom['title'] ?? 'Room',
+                              ),
+                              style: TextStyle(
+                                color: AppColors.accent,
+                                fontSize: 21 * s,
+                                fontWeight: FontWeight.w600,
+                                height: 1.2,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        Text(
+                          _getMessagePreview(lastMsg),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xFF6B6B6B),
+                            fontSize: 25 * s,
+                            height: 1.2,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ),
@@ -772,43 +726,14 @@ class _ContactsSubTabBar extends StatelessWidget {
       context.l10n.messages_fansCount(fansCount),
     ];
 
+    final s = MediaQuery.sizeOf(context).width / 750;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Row(
-        children: List.generate(labels.length, (index) {
-          final selected = selectedIndex == index;
-          return Expanded(
-            child: GestureDetector(
-              onTap: () => onSelected(index),
-              behavior: HitTestBehavior.opaque,
-              child: Column(
-                children: [
-                  Text(
-                    labels[index],
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: selected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                      color: selected
-                          ? AppColors.accent
-                          : AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    height: 3,
-                    width: 28,
-                    decoration: BoxDecoration(
-                      color: selected ? AppColors.accent : Colors.transparent,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }),
+      padding: EdgeInsets.only(top: 41 * s),
+      child: PartyRefFilterChips<int>(
+        values: const [0, 1, 2],
+        selected: selectedIndex,
+        labelOf: (i) => labels[i],
+        onSelect: onSelected,
       ),
     );
   }

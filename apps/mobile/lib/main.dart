@@ -1,43 +1,15 @@
+/*
+ * Livo / SK Live Party
+ * App maintenance & design by NoxLab AI - https://noxlabai.com
+ * Contact: https://noxlabai.com/quote | https://noxlabai.com/book
+ * (c) 2026 NoxLab AI - maintenance and design updates
+ */
 import 'dart:async';
-import 'dart:ui';
 
-import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:sk_live/l10n/app_localizations.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'core/theme/app_theme.dart';
-import 'core/router/app_router.dart';
-import 'core/auth/secure_supabase_local_storage.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'package:sk_live/firebase_options.dart';
-import 'core/services/app_telemetry.dart';
-import 'core/services/notification_service.dart';
-import 'core/services/orbit_voice_session_service.dart';
-import 'core/services/update_service.dart';
-import 'core/services/background_service.dart';
-import 'core/services/hive_cache_service.dart';
-import 'core/util/app_constants.dart';
-import 'core/providers/telemetry_auth_sync.dart';
-import 'core/providers/single_device_session_guard.dart';
-import 'core/widgets/force_update_wrapper.dart';
-import 'core/widgets/maintenance_gate.dart';
-import 'core/widgets/global_patti_route_gate.dart';
-import 'core/widgets/global_win_broadcast_host.dart';
-import 'core/widgets/big_gift_patti_broadcast_host.dart';
-import 'package:sk_live/features/home/presentation/widgets/lucky_bag/lucky_bag_world_banner.dart';
-import 'core/widgets/minimized_room_overlay_host.dart';
-import 'core/widgets/keep_screen_on_scope.dart';
-import 'core/widgets/room_bubble_lifecycle_host.dart';
-import 'core/widgets/room_floating_bubble_overlay.dart';
-import 'core/widgets/dm_gateway_host.dart';
-import 'core/services/room_deep_link_service.dart';
-import 'core/l10n/app_locale.dart';
-import 'core/providers/locale_provider.dart';
+import 'package:sk_live/app_root.dart' deferred as app_root;
+import 'package:sk_live/core/widgets/room_floating_bubble_overlay.dart';
+import 'package:sk_live/zone_errors.dart';
 
 @pragma('vm:entry-point')
 void overlayMain() {
@@ -45,166 +17,59 @@ void overlayMain() {
   overlayMainEntry();
 }
 
-Future<void> _bootstrapFirebase() async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await AppTelemetry.initialize();
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    FirebaseCrashlytics.instance.recordFlutterError(details);
-  };
-  PlatformDispatcher.instance.onError = (error, stack) {
-    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-    return true;
-  };
-}
-
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   PaintingBinding.instance.imageCache.maximumSizeBytes = 60 << 20;
   PaintingBinding.instance.imageCache.maximumSize = 200;
 
-  // Decoded SVGA animations are the app's other large memory consumer and sit
-  // outside Flutter's image cache, so release them when the OS asks rather than
-  // letting them contribute to the process being killed while backgrounded.
-  WidgetsBinding.instance.addObserver(_MemoryPressureObserver());
+  // The native splash is removed when this first frame is drawn. The widget
+  // below is a const colored box: no providers, no session read, no Supabase,
+  // LiveKit, Hive, or Firebase. Those start from the post-frame callback.
+  runZonedGuarded(() => runApp(const _FirstPaint()), reportZoneError);
+}
 
-  await Hive.initFlutter();
-  await HiveCacheService.init();
-  debugPrint(
-    '[HiveCache] boxes ready: app_ui, room_covers, user_media '
-    '(rank_frames lazy)',
-  );
+class _FirstPaint extends StatefulWidget {
+  const _FirstPaint();
 
-  try {
-    await _bootstrapFirebase();
-  } catch (e, st) {
-    debugPrint('Firebase bootstrap failed: $e\n$st');
+  @override
+  State<_FirstPaint> createState() => _FirstPaintState();
+}
+
+class _FirstPaintState extends State<_FirstPaint> {
+  Widget? _app;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Frame 1 is already submitted. Wait one more so it can be presented
+      // before any platform-channel work is queued.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_openAfterFirstFrames());
+      });
+    });
   }
 
-  final projectHost = Uri.parse(AppConstants.supabaseUrl).host.split('.').first;
-  final persistSessionKey = 'sb-$projectHost-auth-token';
-  await Supabase.initialize(
-    url: AppConstants.supabaseUrl,
-    anonKey: AppConstants.supabaseAnonKey,
-    authOptions: FlutterAuthClientOptions(
-      localStorage: SecureSupabaseLocalStorage(
-        persistSessionKey: persistSessionKey,
-      ),
-    ),
-  );
-  debugPrint('[BOOTSTRAP] Supabase ready host=$projectHost (hardcoded Zuvo)');
-
-  await RoomDeepLinkService.captureInitialLink();
-
-  await OrbitVoiceSessionService.initWebRtcAudioAttributes();
-
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
-    ),
-  );
-
-  runZonedGuarded(() => runApp(const ProviderScope(child: SkLiveApp())), (
-    error,
-    stack,
-  ) {
+  Future<void> _openAfterFirstFrames() async {
+    var loaded = false;
     try {
-      FirebaseCrashlytics.instance.recordError(error, stack);
-    } catch (_) {
-      debugPrint('Uncaught: $error\n$stack');
+      await app_root.loadLibrary();
+      loaded = true;
+      await app_root.mountAfterFirstPaint();
+    } catch (e, st) {
+      debugPrint('[BOOT] startup after first frame failed: $e\n$st');
     }
-  });
-
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    unawaited(_initDeferredServices());
-  });
-}
-
-Future<void> _initDeferredServices() async {
-  try {
-    await BackgroundService.initializeService();
-  } catch (e) {
-    debugPrint('BackgroundService init failed: $e');
+    if (!mounted || _app != null || !loaded) return;
+    setState(() {
+      _app = app_root.buildApp();
+    });
   }
-
-  UpdateService.checkForUpdate();
-
-  try {
-    if (Firebase.apps.isEmpty) {
-      await _bootstrapFirebase();
-    }
-    await NotificationService.initialize();
-  } catch (e) {
-    debugPrint('NotificationService init failed: $e');
-  }
-}
-
-class SkLiveApp extends ConsumerWidget {
-  const SkLiveApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(telemetryAuthSyncProvider);
-    ref.watch(singleDeviceSessionGuardProvider);
-    final router = ref.watch(AppRouter.routerProvider);
-    final locale = ref.watch(localeProvider);
-
-    return MaterialApp.router(
-      title: 'LIVO',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      routerConfig: router,
-      locale: locale,
-      supportedLocales: AppLocale.supported,
-      localizationsDelegates: [
-        AppLocalizations.delegate,
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      builder: (context, child) {
-        final media = MediaQuery.of(context);
-        return MediaQuery(
-          data: media.copyWith(
-            textScaler: media.textScaler.clamp(
-              minScaleFactor: 0.85,
-              maxScaleFactor: 1.3,
-            ),
-          ),
-          child: GlobalPattiRouteGate(
-            child: RoomBubbleLifecycleHost(
-              child: KeepScreenOnScope(
-                child: MinimizedRoomOverlayHost(
-                  child: LuckyBagWorldBroadcastHost(
-                    child: GlobalWinBroadcastHost(
-                      child: BigGiftPattiBroadcastHost(
-                        child: DmGatewayHost(
-                          child: MaintenanceGate(
-                            child: ForceUpdateWrapper(
-                              child: child ?? const SizedBox(),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Drops cached SVGA animations when the system reports memory pressure.
-class _MemoryPressureObserver extends WidgetsBindingObserver {
-  @override
-  void didHaveMemoryPressure() {
-    SvgaCache.evictMemory();
-    debugPrint('[memory] pressure — evicted cached SVGA animations');
+  Widget build(BuildContext context) {
+    return _app ?? const ColoredBox(color: Color(0xFF4E342E));
   }
 }
