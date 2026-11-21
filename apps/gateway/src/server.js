@@ -2055,7 +2055,9 @@ io.on("connection", (socket) => {
       if (!socket.rooms.has(`room:${roomId}`)) {
         return ackErr(ack, "not_in_room");
       }
+      const prepT0 = Date.now();
       const seats = await state.getSeatsSnapshot(pubClient, roomId);
+      const prepSeatsMs = Date.now() - prepT0;
       const seat = Array.isArray(seats)
         ? seats.find((s) => seatOccupantIndex(s) === seatIndex)
         : null;
@@ -2064,11 +2066,15 @@ io.on("connection", (socket) => {
       if (holder && holder !== String(userId)) {
         return ackErr(ack, "seat_unavailable");
       }
+      const prepSyncT0 = Date.now();
       const perm = await orbitVoice.syncLivePermission({
         userId: userId,
         roomId: roomId,
         canPublish: true,
       });
+      console.log(
+        `[seat:prepare] ok perm=${perm} seats=${prepSeatsMs}ms sync=${Date.now() - prepSyncT0}ms total=${Date.now() - prepT0}ms`,
+      );
       clearPreparedGrant(roomId, userId);
       const timer = setTimeout(async () => {
         preparedGrants.delete(`${roomId}:${userId}`);
