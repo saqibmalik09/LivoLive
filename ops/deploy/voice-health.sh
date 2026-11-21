@@ -20,7 +20,7 @@ echo "===== voice token mints (last ${WINDOW}s) ====="
 #                    stopped blocking the reply on the admin API.
 # perm=error_*     : LiveKit unreachable — investigate
 docker logs --since "${WINDOW}s" "$GW" 2>&1 \
-  | grep -oE 'perm=[a-z0-9_]+' | sort | uniq -c | sort -rn || echo "(none)"
+  | grep -oE 'perm=[A-Za-z0-9_]+' | sort | uniq -c | sort -rn || echo "(none)"
 
 echo
 echo "===== slowest mints (last ${WINDOW}s) ====="
