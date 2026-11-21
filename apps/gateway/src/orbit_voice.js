@@ -504,8 +504,69 @@ async function mintVoiceToken({
     },
   };
 }
+/**
+ * Signs a join token for a caller that already knows whether the user is on a
+ * seat — the room:join and seat:sit handlers both do. Settings come from the
+ * same 60s cache, and signing is local, so this adds no database or network
+ * work to those handlers.
+ *
+ * Returns null if LiveKit is unconfigured or signing failed; callers omit the
+ * voice fields rather than failing the action.
+ */
+async function mintVoiceTokenFor({ userId, userName, roomId, canPublish }) {
+  if (!userId || String(userId).startsWith("anon:")) return null;
+  if (!roomId) return null;
+  let settings;
+  try {
+    settings = await loadOrbitSettings();
+  } catch (e) {
+    console.warn("[voice] settings for inline mint:", e?.message || e);
+    return null;
+  }
+  return await livekitVoice.mintVoiceTokenFor({
+    userId: userId,
+    userName: userName,
+    roomId: roomId,
+    canPublish: canPublish,
+    settings: settings,
+  });
+}
+
+/**
+ * Applies publish permission to a live LiveKit connection without minting a
+ * token. Used after a seat write so an already-connected client can publish
+ * without reconnecting. Never throws.
+ */
+async function syncLivePermission({ userId, roomId, canPublish }) {
+  if (!userId || !roomId) return "skipped";
+  let settings;
+  try {
+    settings = await loadOrbitSettings();
+  } catch (e) {
+    return "error_settings";
+  }
+  const url = String(settings.livekit_url || "").trim() || process.env.LIVEKIT_URL || "";
+  const apiKey =
+    String(settings.livekit_api_key || "").trim() || process.env.LIVEKIT_API_KEY || "";
+  const apiSecret =
+    String(settings.livekit_api_secret || "").trim() ||
+    process.env.LIVEKIT_API_SECRET ||
+    "";
+  if (!url || !apiKey || !apiSecret) return "not_configured";
+  return await livekitVoice.syncLivePermission({
+    url: url,
+    apiKey: apiKey,
+    apiSecret: apiSecret,
+    room: livekitVoice.livekitRoomName(roomId),
+    identity: String(userId),
+    canPublish: !!canPublish,
+  });
+}
+
 module.exports = {
   mintVoiceToken: mintVoiceToken,
+  mintVoiceTokenFor: mintVoiceTokenFor,
+  syncLivePermission: syncLivePermission,
   clearSettingsCache: clearSettingsCache,
   loadOrbitSettings: loadOrbitSettings,
 };

@@ -326,7 +326,31 @@ class OrbitVoiceSessionService {
     };
 
     Map<String, dynamic>? map;
-    if (AppConstants.useRealtimeGateway &&
+
+    // The gateway now sends a signed session with the room:join and seat:sit
+    // acks. Using it means going live or taking the mic costs no extra round
+    // trip at all. A listener token only satisfies a listener request; a
+    // publish token satisfies either.
+    if (!billingOnly && !leaveSeat) {
+      final prefetched = RoomRealtimeSocket.instance.takeVoiceSession(roomId);
+      if (prefetched != null) {
+        final grantsPublish = prefetched['can_publish'] == true;
+        if (grantsPublish || !(openMic || onSeat)) {
+          debugPrint(
+            '[ORBIT] using prefetched session room=$roomId '
+            'publish=$grantsPublish',
+          );
+          map = prefetched;
+        } else {
+          debugPrint(
+            '[ORBIT] prefetched session is listener-only, minting instead',
+          );
+        }
+      }
+    }
+
+    if (map == null &&
+        AppConstants.useRealtimeGateway &&
         RoomRealtimeSocket.instance.isConnected) {
       try {
         final gw = await RoomRealtimeSocket.instance.voiceToken(body);

@@ -32,6 +32,10 @@ class RoomRealtimeSocket {
   String? _pendingRoomId;
   Map<String, dynamic>? _pendingUser;
   bool _rejoining = false;
+  // LiveKit session handed to us by a join or sit ack, waiting to be consumed
+  // by the voice engine. See takeVoiceSession.
+  Map<String, dynamic>? _prefetchedVoice;
+  String? _prefetchedVoiceRoomId;
   RoomGatewayEventHandler? onEvent;
   RoomGatewaySnapshotHandler? onSnapshot;
   GlobalWinGatewayHandler? onGlobalWin;
@@ -307,6 +311,7 @@ class RoomRealtimeSocket {
       if (res?['ok'] == true) {
         _joinedRoomId = roomId;
         _joinedUser = Map<String, dynamic>.from(user);
+        _rememberVoiceSession(roomId, res);
       } else {
         final err = res?['error']?.toString() ?? 'rejoin_failed';
         debugPrint('[Gateway] rejoin failed: $err');
@@ -375,6 +380,7 @@ class RoomRealtimeSocket {
     if (res?['ok'] == true) {
       _joinedRoomId = roomId;
       _joinedUser = Map<String, dynamic>.from(user);
+      _rememberVoiceSession(roomId, res);
     }
     return res;
   }
@@ -407,6 +413,7 @@ class RoomRealtimeSocket {
       _joinedRoomId = null;
       _joinedUser = null;
     }
+    if (_prefetchedVoiceRoomId == roomId) _clearVoiceSession();
   }
 
   Future<Map<String, dynamic>?> heartbeat({
@@ -433,8 +440,48 @@ class RoomRealtimeSocket {
     return _emitAck('room:snapshot', {'roomId': roomId});
   }
 
-  Future<Map<String, dynamic>?> seatClaim(Map<String, dynamic> payload) {
-    return _emitAck('seat:claim', payload);
+  /// A LiveKit session the gateway sent along with a join or sit ack, so the
+  /// voice engine can connect without asking for a token first.
+  ///
+  /// One-shot: taking it clears it, so a stale token is never reused after the
+  /// user's seat state has changed.
+  Map<String, dynamic>? takeVoiceSession(String roomId) {
+    if (_prefetchedVoiceRoomId != roomId) return null;
+    final session = _prefetchedVoice;
+    _prefetchedVoice = null;
+    _prefetchedVoiceRoomId = null;
+    return session;
+  }
+
+  void _rememberVoiceSession(dynamic roomId, Map<String, dynamic>? ack) {
+    final id = roomId?.toString();
+    if (id == null || id.isEmpty) return;
+    final voice = ack?['voice'];
+    if (voice is! Map) return;
+    _prefetchedVoice = Map<String, dynamic>.from(voice);
+    _prefetchedVoiceRoomId = id;
+  }
+
+  void _clearVoiceSession() {
+    _prefetchedVoice = null;
+    _prefetchedVoiceRoomId = null;
+  }
+
+  /// Takes a seat. Prefers `seat:sit`, which writes the seat and returns a
+  /// LiveKit publish token in the same ack — the old sequence was claim, then
+  /// voice:token, then poll for publish permission, then reconnect, which is
+  /// where the long wait before anyone could hear you came from.
+  ///
+  /// Falls back to `seat:claim` if the gateway does not answer `seat:sit`, so a
+  /// client that reaches a server older than this still seats the user.
+  Future<Map<String, dynamic>?> seatClaim(Map<String, dynamic> payload) async {
+    final res = await _emitAck('seat:sit', payload);
+    if (res?['error']?.toString() == 'timeout') {
+      debugPrint('[Gateway] seat:sit unanswered, falling back to seat:claim');
+      return _emitAck('seat:claim', payload);
+    }
+    _rememberVoiceSession(payload['roomId'], res);
+    return res;
   }
 
   Future<Map<String, dynamic>?> seatLeave(Map<String, dynamic> payload) {

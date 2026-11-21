@@ -253,7 +253,56 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
   };
 }
 
+/**
+ * Mints a join token for a caller that already knows the seat state — the join
+ * handler has just built the snapshot, and the sit handler has just written the
+ * row, so neither needs the two lookups mintVoiceToken does.
+ *
+ * Signing is local HS256, so this costs no network and no database work. That
+ * is what lets the voice session ride along in the join ack and the sit ack
+ * instead of costing the client another round trip before any audio can start.
+ *
+ * Returns null when LiveKit is not configured, so callers can simply omit the
+ * voice fields rather than failing the join.
+ */
+async function mintVoiceTokenFor({
+  userId,
+  userName,
+  roomId,
+  canPublish,
+  settings = {},
+}) {
+  const cfg = resolveConfig(settings);
+  if (!cfg.url || !cfg.apiKey || !cfg.apiSecret) return null;
+  const room = livekitRoomName(roomId);
+  try {
+    const token = await signToken({
+      apiKey: cfg.apiKey,
+      apiSecret: cfg.apiSecret,
+      identity: String(userId),
+      name: String(userName || userId),
+      room: room,
+      canPublish: !!canPublish,
+    });
+    return {
+      token: token,
+      livekit_url: cfg.url,
+      livekit_room: room,
+      orbit_room_id: room,
+      can_publish: !!canPublish,
+      role: canPublish ? "speaker" : "listener",
+      on_seat: !!canPublish,
+      backend: "livekit",
+    };
+  } catch (e) {
+    console.warn("[voice:livekit] inline sign failed:", e?.message || e);
+    return null;
+  }
+}
+
 module.exports = {
   mintVoiceToken: mintVoiceToken,
+  mintVoiceTokenFor: mintVoiceTokenFor,
+  syncLivePermission: syncLivePermission,
   livekitRoomName: livekitRoomName,
 };

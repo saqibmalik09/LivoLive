@@ -574,6 +574,192 @@ async function persistRoomMembership(roomId, userId) {
     console.warn("[presence] join persist:", err.message);
   }
 }
+const VOICE_INLINE_TIMEOUT_MS = Number(
+  process.env.VOICE_INLINE_TIMEOUT_MS || 400,
+);
+/**
+ * Builds the voice session to send with a room:join ack.
+ *
+ * Publish permission comes from the seat rows in the snapshot, never from
+ * anything the client claimed — same rule mintVoiceToken enforces, just
+ * without repeating its two lookups.
+ *
+ * Returns null when LiveKit is unconfigured or the signer failed, so a join
+ * still succeeds and the client falls back to asking for a token.
+ */
+async function voiceSessionFromSnapshot(snapshot, userId, user, roomId) {
+  if (!userId || String(userId).startsWith("anon:")) return null;
+  const seats = Array.isArray(snapshot?.seats) ? snapshot.seats : [];
+  const canPublish = seats.some((s) => seatOccupantId(s) === String(userId));
+  try {
+    // Signing is local, but the settings read behind it can touch Postgres on
+    // a cold cache. Capped so a slow database can never hold up a join: the
+    // client simply asks for a token the old way instead.
+    return await Promise.race([
+      orbitVoice.mintVoiceTokenFor({
+        userId: userId,
+        userName: user?.username || user?.name || userId,
+        roomId: roomId,
+        canPublish: canPublish,
+      }),
+      new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), VOICE_INLINE_TIMEOUT_MS);
+        if (typeof timer.unref === "function") timer.unref();
+      }),
+    ]);
+  } catch (err) {
+    console.warn("[room:join] inline voice session:", err.message);
+    return null;
+  }
+}
+/**
+ * Writes a seat and fans the change out. Shared by seat:claim and seat:sit.
+ *
+ * With `withVoice`, the ack also carries a publish token and the live
+ * permission sync is started in the background. That is the whole point of
+ * seat:sit: the old sequence was claim, then voice:token, then poll for
+ * publish permission, then give up and reconnect to LiveKit — which is where
+ * the long wait before anyone could hear you came from. seat:claim behaves
+ * exactly as before.
+ */
+async function handleSeatClaim(socket, payload, ack, { withVoice }) {
+  const label = withVoice ? "seat:sit" : "seat:claim";
+  try {
+    noteSocketActivity(socket, label);
+    const roomId = String(payload.roomId || "").trim();
+    const seatIndex = Number(payload.seatIndex);
+    if (!roomId || Number.isNaN(seatIndex)) {
+      return ackErr(ack, "roomId and seatIndex required");
+    }
+    const userId = socket.data.userId;
+    const isMuted =
+      payload.isMuted !== false && payload.isMuted !== undefined
+        ? !!payload.isMuted
+        : !!payload.is_muted;
+    const seatRowId = payload.seatRowId || payload.seat_row_id || null;
+    const eventId = payload.event_id || uuidv4();
+    const user = payload.user || { id: userId };
+    await ensureSingleRoomPresence(userId, roomId, user);
+    cancelGraceVacate(userId);
+    const t0 = Date.now();
+    let row;
+    try {
+      row = await db.seatClaim({
+        roomId: roomId,
+        userId: userId,
+        seatIndex: seatIndex,
+        isMuted: isMuted,
+      });
+    } catch (err) {
+      if (err?.code !== "seat_unavailable") throw err;
+      const holder = err.occupantId;
+      const reclaimable =
+        !err.locked &&
+        holder &&
+        holder !== userId &&
+        !(await userHasLiveSocket(holder));
+      if (!reclaimable) {
+        console.log(
+          `[seat:audit] claim DENIED user=${userId} room=${roomId} ` +
+            `seat=${seatIndex} holder=${holder ?? "none"} locked=${!!err.locked}`,
+        );
+        return ackErr(ack, err.locked ? "seat_locked" : "seat_unavailable");
+      }
+      console.log(
+        `[seat:audit] claim reclaim ghost seat=${seatIndex} room=${roomId} ` +
+          `from=${holder} to=${userId}`,
+      );
+      await vacateUserFromRoom(roomId, holder, { id: holder }, "ghost_seat");
+      row = await db.seatClaim({
+        roomId: roomId,
+        userId: userId,
+        seatIndex: seatIndex,
+        isMuted: isMuted,
+      });
+    }
+    const claimMs = Date.now() - t0;
+    if (!row) {
+      return ackErr(ack, "seat_unavailable");
+    }
+    const tSeats = Date.now();
+    const seats = await refreshSeatsCache(roomId);
+    const seatsMs = Date.now() - tSeats;
+    const data = {
+      event_id: eventId,
+      room_id: roomId,
+      actor_user_id: userId,
+      action: "take",
+      seat_index: seatIndex,
+      user_id: userId,
+      user: user,
+      is_muted: isMuted,
+      seat_row_id: row?.id || seatRowId,
+    };
+    let voice = null;
+    if (withVoice) {
+      voice = await orbitVoice
+        .mintVoiceTokenFor({
+          userId: userId,
+          userName: user?.username || user?.name || userId,
+          roomId: roomId,
+          canPublish: true,
+        })
+        .catch((e) => {
+          console.warn(`[${label}] inline voice:`, e.message);
+          return null;
+        });
+      // Grants publish on a connection that is already open, so a client that
+      // joined as a listener does not have to reconnect. Fire-and-forget: the
+      // token in the ack is already valid either way.
+      void orbitVoice
+        .syncLivePermission({
+          userId: userId,
+          roomId: roomId,
+          canPublish: true,
+        })
+        .then(
+          (result) => {
+            if (result !== "updated" && result !== "not_connected") {
+              console.warn(
+                `[${label}] perm sync room=${roomId} user=${userId} perm=${result}`,
+              );
+            }
+          },
+          (e) => console.warn(`[${label}] perm sync threw:`, e?.message || e),
+        );
+    }
+    ackOk(ack, {
+      event_id: eventId,
+      seat: row,
+      seats: seats,
+      ...(voice ? { voice: voice } : {}),
+    });
+    console.log(
+      `[${label}] ok`,
+      JSON.stringify({
+        roomId: roomId,
+        seatIndex: seatIndex,
+        claim_ms: claimMs,
+        seats_ms: seatsMs,
+        voice: withVoice ? !!voice : undefined,
+        total_ms: Date.now() - t0,
+      }),
+    );
+    emitRoomEvent(roomId, "room_seat", data, userId).catch((e) =>
+      console.warn(`[${label}] fanout failed:`, e.message),
+    );
+    seatTrace(label, {
+      userId: userId,
+      roomId: roomId,
+      seat_index: seatIndex,
+      socketId: socket.id,
+      seat_row_id: row?.id || seatRowId,
+    });
+  } catch (err) {
+    console.error(`[${label}]`, err.message);
+    ackErr(ack, err.message);
+  }
+}
 function seatOccupantId(seat) {
   if (!seat || typeof seat !== "object") return null;
   const id = seat.user_id ?? seat.userId;
@@ -1630,7 +1816,21 @@ io.on("connection", (socket) => {
         joinPayload,
         socket.data.userId,
       );
-      ackOk(ack, { room: `room:${roomId}`, seq: snapshot.seq });
+      // The voice session rides along in the ack. Signing is local, and the
+      // seat state is already in the snapshot we just built, so this costs
+      // nothing — and it saves the client a separate voice:token round trip
+      // before it can connect to LiveKit and hear anybody.
+      const voice = await voiceSessionFromSnapshot(
+        snapshot,
+        socket.data.userId,
+        user,
+        roomId,
+      );
+      ackOk(ack, {
+        room: `room:${roomId}`,
+        seq: snapshot.seq,
+        ...(voice ? { voice: voice } : {}),
+      });
       // Durable membership bookkeeping runs after the joiner already has their
       // snapshot. It used to sit in front of the snapshot, so every join waited
       // on a room read, a member upsert and a presence RPC before one seat
@@ -1753,104 +1953,15 @@ io.on("connection", (socket) => {
       ackErr(ack, err.message);
     }
   });
-  socket.on("seat:claim", async (payload = {}, ack) => {
-    try {
-      noteSocketActivity(socket, "seat:claim");
-      const roomId = String(payload.roomId || "").trim();
-      const seatIndex = Number(payload.seatIndex);
-      if (!roomId || Number.isNaN(seatIndex)) {
-        return ackErr(ack, "roomId and seatIndex required");
-      }
-      const userId = socket.data.userId;
-      const isMuted =
-        payload.isMuted !== false && payload.isMuted !== undefined
-          ? !!payload.isMuted
-          : !!payload.is_muted;
-      const seatRowId = payload.seatRowId || payload.seat_row_id || null;
-      const eventId = payload.event_id || uuidv4();
-      const user = payload.user || { id: userId };
-      await ensureSingleRoomPresence(userId, roomId, user);
-      cancelGraceVacate(userId);
-      const t0 = Date.now();
-      let row;
-      try {
-        row = await db.seatClaim({
-          roomId: roomId,
-          userId: userId,
-          seatIndex: seatIndex,
-          isMuted: isMuted,
-        });
-      } catch (err) {
-        if (err?.code !== "seat_unavailable") throw err;
-        const holder = err.occupantId;
-        const reclaimable =
-          !err.locked &&
-          holder &&
-          holder !== userId &&
-          !(await userHasLiveSocket(holder));
-        if (!reclaimable) {
-          console.log(
-            `[seat:audit] claim DENIED user=${userId} room=${roomId} ` +
-              `seat=${seatIndex} holder=${holder ?? "none"} locked=${!!err.locked}`,
-          );
-          return ackErr(ack, err.locked ? "seat_locked" : "seat_unavailable");
-        }
-        console.log(
-          `[seat:audit] claim reclaim ghost seat=${seatIndex} room=${roomId} ` +
-            `from=${holder} to=${userId}`,
-        );
-        await vacateUserFromRoom(roomId, holder, { id: holder }, "ghost_seat");
-        row = await db.seatClaim({
-          roomId: roomId,
-          userId: userId,
-          seatIndex: seatIndex,
-          isMuted: isMuted,
-        });
-      }
-      const claimMs = Date.now() - t0;
-      if (!row) {
-        return ackErr(ack, "seat_unavailable");
-      }
-      const tSeats = Date.now();
-      const seats = await refreshSeatsCache(roomId);
-      const seatsMs = Date.now() - tSeats;
-      const data = {
-        event_id: eventId,
-        room_id: roomId,
-        actor_user_id: userId,
-        action: "take",
-        seat_index: seatIndex,
-        user_id: userId,
-        user: user,
-        is_muted: isMuted,
-        seat_row_id: row?.id || seatRowId,
-      };
-      ackOk(ack, { event_id: eventId, seat: row, seats: seats });
-      console.log(
-        "[seat:claim] ok",
-        JSON.stringify({
-          roomId: roomId,
-          seatIndex: seatIndex,
-          claim_ms: claimMs,
-          seats_ms: seatsMs,
-          total_ms: Date.now() - t0,
-        }),
-      );
-      emitRoomEvent(roomId, "room_seat", data, userId).catch((e) =>
-        console.warn("[seat:claim] fanout failed:", e.message),
-      );
-      seatTrace("seat:claim", {
-        userId: userId,
-        roomId: roomId,
-        seat_index: seatIndex,
-        socketId: socket.id,
-        seat_row_id: row?.id || seatRowId,
-      });
-    } catch (err) {
-      console.error("[seat:claim]", err.message);
-      ackErr(ack, err.message);
-    }
-  });
+  // seat:claim is unchanged. seat:sit is the same write plus a publish token in
+  // the same ack, so taking the mic costs one round trip instead of claim →
+  // voice:token → wait for permission → reconnect.
+  socket.on("seat:claim", (payload = {}, ack) =>
+    handleSeatClaim(socket, payload, ack, { withVoice: false }),
+  );
+  socket.on("seat:sit", (payload = {}, ack) =>
+    handleSeatClaim(socket, payload, ack, { withVoice: true }),
+  );
   socket.on("seat:leave", async (payload = {}, ack) => {
     try {
       noteSocketActivity(socket, "seat:leave");
