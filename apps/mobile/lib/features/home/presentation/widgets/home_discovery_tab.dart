@@ -61,6 +61,16 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
 
   double _chipsSlotOffset = 0;
 
+  // Published separately from the field above so a slot change repaints the
+  // chips overlay and the clip without rebuilding the whole tab. See
+  // _noteChipsSlot.
+  final ValueNotifier<double> _chipsSlotTick = ValueNotifier<double>(0);
+
+  // Drives the two AnimatedBuilders that position the chips: the scroll
+  // controller for the common case, the tick for when the header above the
+  // chips changes height while the list is standing still.
+  Listenable? _chipsListenable;
+
   // Scroll extent preceding the chips slot == height of banner+Top3+podium.
   double _topSectionExtent = 0;
 
@@ -76,6 +86,10 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
   void initState() {
     super.initState();
     widget.scrollController.addListener(_handleHeaderScroll);
+    _chipsListenable = Listenable.merge([
+      widget.scrollController,
+      _chipsSlotTick,
+    ]);
   }
 
   @override
@@ -83,6 +97,7 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
     widget.scrollController.removeListener(_handleHeaderScroll);
     _bannerTick.dispose();
     _topVisible.dispose();
+    _chipsSlotTick.dispose();
     super.dispose();
   }
 
@@ -106,8 +121,16 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
   void _noteChipsSlot(double offset) {
     if ((offset - _chipsSlotOffset).abs() < 0.5) return;
     _chipsSlotOffset = offset;
+    // This used to setState the whole tab, from a sliver layout callback that
+    // fires while the list is scrolling past the header. Each one re-read the
+    // pagination provider, rebuilt the listed-id set, re-sorted the gift-total
+    // key and handed the grid brand-new delegates — mid-fling. That is the
+    // half-second catch that made a swipe not take.
+    //
+    // Only the chips overlay and the clip read this, and both already rebuild
+    // per scroll frame, so publishing it through a notifier is enough.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() {});
+      if (mounted) _chipsSlotTick.value = _chipsSlotOffset;
     });
   }
 
@@ -311,7 +334,7 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
       fit: StackFit.expand,
       children: [
         AnimatedBuilder(
-          animation: widget.scrollController,
+          animation: _chipsListenable!,
           builder: (context, child) {
             final top = chipsTop();
             final pinned = top <= pinnedTop + 0.5;
@@ -329,7 +352,7 @@ class _HomeDiscoveryTabState extends ConsumerState<HomeDiscoveryTab> {
         ),
         Positioned.fill(
           child: AnimatedBuilder(
-            animation: widget.scrollController,
+            animation: _chipsListenable!,
             builder: (context, child) => Stack(
               clipBehavior: Clip.hardEdge,
               children: [

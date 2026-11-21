@@ -135,7 +135,8 @@ class RoomGamesSheet extends StatelessWidget {
                             strokeWidth: 2.4,
                           ),
                         )
-                      : ListView.builder(
+                      : _DragDownToDismiss(
+                          child: ListView.builder(
                           padding: EdgeInsets.zero,
                           itemCount: sections.length,
                           itemBuilder: (context, sIndex) {
@@ -192,7 +193,8 @@ class RoomGamesSheet extends StatelessWidget {
                                 ],
                               ),
                             );
-                          },
+                            },
+                          ),
                         ),
                 ),
               ],
@@ -200,6 +202,61 @@ class RoomGamesSheet extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Lets a downward drag on the games list close the sheet.
+///
+/// `showModalBottomSheet` has `enableDrag: true`, but the list inside wins the
+/// vertical drag in the gesture arena, so swiping down only scrolled and the
+/// user had to tap the barrier to close. Once the list is at its top, further
+/// downward pull is overscroll, and that is what dismisses here.
+class _DragDownToDismiss extends StatefulWidget {
+  const _DragDownToDismiss({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_DragDownToDismiss> createState() => _DragDownToDismissState();
+}
+
+class _DragDownToDismissState extends State<_DragDownToDismiss> {
+  static const double _dismissAfter = 90;
+  double _pulled = 0;
+  bool _popped = false;
+
+  void _pull(double pixels) {
+    if (_popped || pixels <= 0) return;
+    _pulled += pixels;
+    if (_pulled < _dismissAfter) return;
+    _popped = true;
+    Navigator.maybePop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is OverscrollNotification) {
+          // Clamping physics (Android) reports the pull here; a negative
+          // overscroll is past the top edge.
+          if (notification.dragDetails != null) _pull(-notification.overscroll);
+        } else if (notification is ScrollUpdateNotification) {
+          // Bouncing physics (iOS) scrolls out of range instead of reporting
+          // overscroll, so measure how far past the top the list sits.
+          if (notification.dragDetails != null) {
+            final metrics = notification.metrics;
+            final past = metrics.minScrollExtent - metrics.pixels;
+            if (past >= _dismissAfter) _pull(past);
+          }
+        } else if (notification is ScrollStartNotification ||
+            notification is ScrollEndNotification) {
+          _pulled = 0;
+        }
+        return false;
+      },
+      child: widget.child,
     );
   }
 }

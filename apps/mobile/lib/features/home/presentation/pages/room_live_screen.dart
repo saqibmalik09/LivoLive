@@ -1022,9 +1022,33 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
   }
 
+  bool _profileRetryUsed = false;
+
+  Future<void> _setupRoomSubscriptionsWhenProfileReady() async {
+    if (_profileRetryUsed) return;
+    _profileRetryUsed = true;
+    try {
+      await ref
+          .read(userProfileProvider.future)
+          .timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('[SEAT] profile unavailable, room realtime not started: $e');
+      return;
+    }
+    if (!mounted) return;
+    _setupRoomSubscriptions();
+  }
+
   void _setupRoomSubscriptions() {
     final myUser = ref.read(userProfileProvider).value;
-    if (myUser == null) return;
+    if (myUser == null) {
+      // The profile is normally warm by the time a room opens, but on a cold
+      // start it is not. This used to return and never retry, so the gateway
+      // was never joined and no seat snapshot ever arrived — seats stayed
+      // empty until the user backed out and re-entered.
+      unawaited(_setupRoomSubscriptionsWhenProfileReady());
+      return;
+    }
 
     if (AppConstants.useRealtimeGateway) {
       unawaited(_setupGatewayRealtime(myUser));
@@ -3015,17 +3039,54 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }).toList();
   }
 
-  Future<void> _fetchActiveGames() async {
+  // Opening the games sheet refetches the catalog. Publishing an identical list
+  // still rebuilt the whole sheet — re-laying out every grid and re-measuring
+  // every tile label — which is what made the open sheet feel stuck. Only a
+  // real change is worth a rebuild.
+  String _gamesSignature(List<Map<String, dynamic>> list) {
+    final b = StringBuffer()..write(list.length);
+    for (final g in list) {
+      b
+        ..write('|')
+        ..write(g['id'] ?? g['slug'] ?? '')
+        ..write(':')
+        ..write(g['icon_url'] ?? '')
+        ..write(':')
+        ..write(g['maintenance_mode'] ?? '');
+    }
+    return b.toString();
+  }
+
+  String _publishedGamesSignature = '';
+
+  void _publishActiveGames(List<Map<String, dynamic>> next) {
+    if (!mounted) return;
+    final signature = _gamesSignature(next);
+    _activeGames = next;
+    if (signature == _publishedGamesSignature) return;
+    _publishedGamesSignature = signature;
+    _gamesRev.value++;
+  }
+
+  DateTime? _lastGamesCatalogFetch;
+  static const Duration _gamesCatalogTtl = Duration(seconds: 90);
+
+  Future<void> _fetchActiveGames({bool force = false}) async {
+    final lastFetch = _lastGamesCatalogFetch;
+    if (!force &&
+        lastFetch != null &&
+        _activeGames.isNotEmpty &&
+        DateTime.now().difference(lastFetch) < _gamesCatalogTtl) {
+      return;
+    }
+    _lastGamesCatalogFetch = DateTime.now();
     try {
       final cached = HiveCacheService.loadGames();
       if (cached != null && cached.isNotEmpty && mounted) {
         final visibleCached = await filterGamesByAudience(
           _withResolvedTulasiIcons(cached),
         );
-        if (mounted) {
-          _activeGames = visibleCached;
-          _gamesRev.value++;
-        }
+        _publishActiveGames(visibleCached);
       }
 
       final catsById = <String, Map<String, dynamic>>{};
@@ -3093,21 +3154,18 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       final visible = await filterGamesByAudience(games);
       debugPrint('[GAMES] visible after audience=${visible.length}');
 
-      if (mounted) {
-        _activeGames = visible;
-        _gamesRev.value++;
-      }
+      _publishActiveGames(visible);
     } catch (e) {
       debugPrint('Error fetching active games: $e');
+      // A failed refresh must not poison the TTL, or the next open would also
+      // skip the retry and the sheet would stay on whatever it had.
+      _lastGamesCatalogFetch = null;
       final cached = HiveCacheService.loadGames();
       if (cached != null && cached.isNotEmpty && mounted) {
         final visibleCached = await filterGamesByAudience(
           _withResolvedTulasiIcons(cached),
         );
-        if (mounted) {
-          _activeGames = visibleCached;
-          _gamesRev.value++;
-        }
+        _publishActiveGames(visibleCached);
       }
     }
   }
@@ -4007,8 +4065,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         );
         return;
       }
-      devLog('[SEAT] clearStale → requestSnapshot (no Postgres delete)');
-      unawaited(RoomRealtimeSocket.instance.requestSnapshot(roomId));
+      // Nothing to clear on the gateway: the seat state lives server-side and
+      // the join already asks for it. _initSeats fires one requestSnapshot and
+      // room:join pushes another, so a third here only duplicated work.
+      devLog('[SEAT] clearStale → no-op on gateway');
       return;
     }
 

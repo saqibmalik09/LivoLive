@@ -44,6 +44,34 @@ import 'package:sk_live/core/providers/rooms_daily_gift_totals_provider.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
 import 'package:sk_live/core/util/silent_connection_error.dart';
 
+List<Country>? _sortedCountriesCache;
+
+/// Every country, priority markets first, then alphabetical.
+///
+/// The result never changes, but this used to be recomputed on every build of
+/// the Room tab — a fresh `getAll()` plus a sort whose comparator ran a linear
+/// `indexOf` over the priority list for each comparison. That is a few thousand
+/// string compares per frame while the user is scrolling.
+List<Country> _countriesByPriority(List<String> priorityCodes) {
+  final cached = _sortedCountriesCache;
+  if (cached != null) return cached;
+  final rank = <String, int>{};
+  for (var i = 0; i < priorityCodes.length; i++) {
+    rank.putIfAbsent(priorityCodes[i], () => i);
+  }
+  final sorted = List<Country>.from(CountryService().getAll())
+    ..sort((a, b) {
+      final aIdx = rank[a.countryCode];
+      final bIdx = rank[b.countryCode];
+      if (aIdx != null && bIdx != null) return aIdx.compareTo(bIdx);
+      if (aIdx != null) return -1;
+      if (bIdx != null) return 1;
+      return a.name.compareTo(b.name);
+    });
+  _sortedCountriesCache = sorted;
+  return sorted;
+}
+
 class PartyScreen extends ConsumerStatefulWidget {
   const PartyScreen({super.key});
 
@@ -1673,7 +1701,6 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
       });
     }
 
-    final allCountries = CountryService().getAll();
     const priorityCodes = [
       'PK',
       'SA',
@@ -1694,15 +1721,7 @@ class _PartyScreenState extends ConsumerState<PartyScreen>
       'BB',
       'BD',
     ];
-    final sortedCountries = List<Country>.from(allCountries)
-      ..sort((a, b) {
-        final aIdx = priorityCodes.indexOf(a.countryCode);
-        final bIdx = priorityCodes.indexOf(b.countryCode);
-        if (aIdx != -1 && bIdx != -1) return aIdx.compareTo(bIdx);
-        if (aIdx != -1) return -1;
-        if (bIdx != -1) return 1;
-        return a.name.compareTo(b.name);
-      });
+    final sortedCountries = _countriesByPriority(priorityCodes);
 
     final giftTotals = roomsState.giftTotals;
 
