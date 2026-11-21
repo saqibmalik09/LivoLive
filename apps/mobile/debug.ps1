@@ -35,6 +35,12 @@ if (-not $passedDevice) {
   $deviceArgs = @('-d', $phone.id)
 }
 
-Write-Host "Debug build only. Project: $root"
-& $flutterBat run --debug @deviceArgs @args
+# Default is --debug. Pass --profile (AOT, release-like speed, debug-signed so it
+# installs) or --release yourself to measure real performance.
+$modeArgs = @('--debug')
+foreach ($arg in $args) {
+  if ($arg -in @('--debug', '--profile', '--release', '--jit-release')) { $modeArgs = @() }
+}
+Write-Host "Mode: $(if ($modeArgs.Count) { 'debug' } else { ($args | Where-Object { $_ -like '--*' } | Select-Object -First 1) }). Project: $root"
+& $flutterBat run @modeArgs @deviceArgs @args
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
