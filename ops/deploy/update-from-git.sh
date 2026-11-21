@@ -90,13 +90,17 @@ rsync -a --delete \
 
 # Prove the new code is actually inside the running container. A successful
 # build that was never picked up looks identical to a real deploy otherwise.
+# Comparing checksums rather than grepping for a marker string means this check
+# keeps working for every future change without being edited.
 if [[ "$SERVICE" == "gateway" ]]; then
   echo "==> verifying new gateway code is live"
-  if docker exec "sklive-gateway" \
-       grep -q 'PERMISSION_SYNC_WAIT_MS' /app/src/livekit_voice.js 2>/dev/null; then
-    echo "==> OK: non-blocking voice mint is in the running container"
+  WANT=$(md5sum "$CLONE/$SRC/src/server.js" | cut -d' ' -f1)
+  GOT=$(docker exec sklive-gateway md5sum /app/src/server.js 2>/dev/null | cut -d' ' -f1 || true)
+  if [[ -n "$GOT" && "$WANT" == "$GOT" ]]; then
+    echo "==> OK: running container matches $BRANCH @ ${HEAD_SHA} (server.js $WANT)"
   else
-    echo "!! the running container does NOT contain the expected change." >&2
+    echo "!! the running container does NOT match the deployed source." >&2
+    echo "   want server.js md5 $WANT, container reports '${GOT:-unreadable}'." >&2
     echo "   Check the build output above; the old image may still be in use." >&2
     exit 1
   fi
