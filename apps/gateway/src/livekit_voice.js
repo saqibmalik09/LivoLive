@@ -58,6 +58,17 @@ async function signToken({ apiKey, apiSecret, identity, name, room, canPublish }
     .sign(new TextEncoder().encode(apiSecret));
 }
 
+// Server-to-LiveKit admin calls (grant/revoke publish) should not travel the
+// public proxy that phones use: it adds TLS and proxy latency and jitter that a
+// call between two containers on the same host does not need. Set
+// LIVEKIT_ADMIN_URL to LiveKit's internal address (for example
+// http://172.17.0.1:7880) to take that hop out; unset keeps the public URL.
+function adminBaseFrom(wsUrl) {
+  const internal = String(process.env.LIVEKIT_ADMIN_URL || "").trim();
+  if (internal) return internal.replace(/\/$/, "");
+  return httpBaseFrom(wsUrl);
+}
+
 function httpBaseFrom(wsUrl) {
   return String(wsUrl)
     .replace(/^wss:/i, "https:")
@@ -121,7 +132,7 @@ async function syncLivePermissionOnce(
   try {
     const token = await signAdminToken({ apiKey: apiKey, apiSecret: apiSecret, room: room });
     const res = await fetch(
-      `${httpBaseFrom(url)}/twirp/livekit.RoomService/UpdateParticipant`,
+      `${adminBaseFrom(url)}/twirp/livekit.RoomService/UpdateParticipant`,
       {
         method: "POST",
         headers: {
