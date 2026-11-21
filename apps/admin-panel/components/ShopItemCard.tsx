@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Gift, Loader2, Pencil, ShoppingBag } from "lucide-react";
@@ -107,7 +108,7 @@ export function ShopItemCard({
                 </div>
               )}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
+              <CdnImg
                 key={imgSrc}
                 src={imgSrc}
                 alt={name}

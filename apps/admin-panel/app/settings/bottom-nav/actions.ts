@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 const VALID_KEYS = ["home", "party", "game", "message", "my"] as const;
 export type BottomNavKey = (typeof VALID_KEYS)[number];
@@ -85,24 +86,12 @@ export async function uploadBottomNavIcon(formData: FormData) {
     const fileName = `bottom-nav/${navKey}-${variant}-${Date.now()}.${safeExt}`;
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const contentType = resolveContentType(fileEntry, originalName);
-    let uploadError = (
-      await supabaseAdmin.storage.from("app_assets").upload(fileName, buffer, {
-        contentType,
-        upsert: true,
-      })
-    ).error;
-    if (uploadError && contentType !== "application/octet-stream") {
-      uploadError = (
-        await supabaseAdmin.storage.from("app_assets").upload(fileName, buffer, {
-          contentType: "application/octet-stream",
-          upsert: true,
-        })
-      ).error;
-    }
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const column = columnForVariant(variant);
     const { error: dbError } = await supabaseAdmin
       .from("bottom_nav_items")

@@ -1,9 +1,3 @@
-/*
- * Livo / SK Live Party
- * App maintenance & design by NoxLab AI - https://noxlabai.com
- * Contact: https://noxlabai.com/quote | https://noxlabai.com/book
- * (c) 2026 NoxLab AI - maintenance and design updates
- */
 require("dotenv").config();
 const http = require("http");
 const fs = require("fs");
@@ -524,69 +518,25 @@ async function redisSeatIndexForUser(roomId, userId) {
   } catch (_) {}
   return null;
 }
-function bumpSeatEmit(socket) {
-  socket.data.seatEmitGen = (socket.data.seatEmitGen || 0) + 1;
-  return socket.data.seatEmitGen;
-}
-function emitCachedSeats(socket, roomId) {
-  const gen = bumpSeatEmit(socket);
-  void (async () => {
-    try {
-      const seats = await state.getSeatsSnapshot(pubClient, roomId);
-      if (!Array.isArray(seats) || seats.length === 0) return;
-      if (!socket.connected || socket.data.seatEmitGen !== gen) return;
-      socket.emit("room:snapshot", { room_id: roomId, seats: seats });
-    } catch (err) {
-      console.warn("[room:join] early seats:", err.message);
-    }
-  })();
-}
 async function buildSnapshot(roomId) {
-  const [
-    cachedSeats,
-    cachedMeta,
-    presence,
-    seqRaw,
-    seatGiftTotals,
-    cachedYoutube,
-    cachedAudio,
-  ] = await Promise.all([
-    state.getSeatsSnapshot(pubClient, roomId),
-    state.getMetaSnapshot(pubClient, roomId),
-    state.listPresence(pubClient, roomId),
-    pubClient.get(`room:${roomId}:seq`),
-    state.getSeatGiftTotals(pubClient, roomId),
-    state.getYoutubeState(pubClient, roomId),
-    state.getSharedAudioState(pubClient, roomId),
-  ]);
-  let seats = cachedSeats;
-  let meta = cachedMeta;
-  const pending = [];
-  if (!seats) {
-    pending.push(
-      refreshSeatsCache(roomId).then((rows) => {
-        seats = rows;
-      }),
-    );
-  }
+  let seats = await state.getSeatsSnapshot(pubClient, roomId);
+  if (!seats) seats = await refreshSeatsCache(roomId);
+  let meta = await state.getMetaSnapshot(pubClient, roomId);
   if (!meta) {
-    pending.push(
-      (async () => {
-        try {
-          meta = await db.loadRoomMeta(roomId);
-          await state.setMetaSnapshot(pubClient, roomId, meta);
-        } catch (_) {}
-      })(),
-    );
+    try {
+      meta = await db.loadRoomMeta(roomId);
+      await state.setMetaSnapshot(pubClient, roomId, meta);
+    } catch (_) {}
   }
-  if (pending.length) await Promise.all(pending);
-  const seq = Number(seqRaw || 0);
-  let youtubeState = cachedYoutube;
+  const presence = await state.listPresence(pubClient, roomId);
+  const seq = Number((await pubClient.get(`room:${roomId}:seq`)) || 0);
+  const seatGiftTotals = await state.getSeatGiftTotals(pubClient, roomId);
+  let youtubeState = await state.getYoutubeState(pubClient, roomId);
   if (!youtubeState && meta?.youtube_state) {
     youtubeState =
       typeof meta.youtube_state === "object" ? meta.youtube_state : null;
   }
-  let sharedAudioState = cachedAudio;
+  let sharedAudioState = await state.getSharedAudioState(pubClient, roomId);
   if (!sharedAudioState && meta?.shared_audio_state) {
     sharedAudioState =
       typeof meta.shared_audio_state === "object"
@@ -1490,7 +1440,6 @@ io.on("connection", (socket) => {
         socket.data.userId = claimedId;
       }
       user.id = socket.data.userId;
-      emitCachedSeats(socket, roomId);
       if (prevSocketRoom && prevSocketRoom !== roomId) {
         await vacateUserFromRoom(
           prevSocketRoom,
@@ -1525,7 +1474,6 @@ io.on("connection", (socket) => {
         }
       }
       const snapshot = await buildSnapshot(roomId);
-      bumpSeatEmit(socket);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
       const joinPayload = {
         event_id: payload.event_id || uuidv4(),
@@ -1650,9 +1598,7 @@ io.on("connection", (socket) => {
     try {
       const roomId = String(payload.roomId || socket.data.roomId || "").trim();
       if (!roomId) return ackErr(ack, "roomId required");
-      emitCachedSeats(socket, roomId);
       const snapshot = await buildSnapshot(roomId);
-      bumpSeatEmit(socket);
       ackOk(ack, snapshot);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
     } catch (err) {

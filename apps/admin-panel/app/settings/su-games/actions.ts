@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import {
   resolveRankingAssetContentType,
   resolveRankingAssetExtension,
@@ -224,12 +225,13 @@ export async function uploadSuGameImage(formData: FormData) {
     const contentType = resolveRankingAssetContentType(file, file.name);
     const fileName = `su-games/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { error } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, { contentType, upsert: true });
-    if (error) throw error;
-    const { data } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
-    return { success: true as const, url: data.publicUrl };
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
+    return { success: true as const, url: publicUrl };
   } catch (e: unknown) {
     return {
       success: false as const,

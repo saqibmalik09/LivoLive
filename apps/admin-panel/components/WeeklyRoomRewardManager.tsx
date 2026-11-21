@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -269,7 +270,7 @@ export function WeeklyRoomRewardManager({
                   <div className="flex items-end gap-3">
                     <div className="w-14 h-14 rounded-xl overflow-hidden bg-black/40 border border-white/10">
                       {row.image_url ? (
-                        <img src={row.image_url} alt="" className="w-full h-full object-cover" />
+                        <CdnImg src={row.image_url} alt="" className="w-full h-full object-cover" />
                       ) : null}
                     </div>
                     <div>

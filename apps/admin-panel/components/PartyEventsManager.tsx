@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -470,7 +471,7 @@ export function PartyEventsManager({
                 <div className="flex gap-4 items-start">
                   <div className="w-40 h-24 rounded-xl overflow-hidden bg-black/40 border border-white/10 shrink-0">
                     {bannerUrl ? (
-                      <img src={bannerUrl} alt="" className="w-full h-full object-cover" />
+                      <CdnImg src={bannerUrl} alt="" className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-white/20 text-xs">
                         No banner
@@ -770,7 +771,7 @@ function GameStarGamePicker({
                 }`}
               >
                 {g.icon_url ? (
-                  <img
+                  <CdnImg
                     src={g.icon_url}
                     alt=""
                     className="w-8 h-8 rounded object-cover bg-black/40"
@@ -856,7 +857,7 @@ function WeeklyStarGiftEditor({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-amber-200/80">Slot {idx + 1}</span>
                 {selected?.image_url ? (
-                  <img
+                  <CdnImg
                     src={selected.image_url}
                     alt=""
                     className="w-9 h-9 object-contain rounded bg-black/40"
@@ -981,7 +982,7 @@ function CpGiftPicker({
                   className="shrink-0"
                 />
                 {g.image_url ? (
-                  <img src={g.image_url} alt="" className="w-8 h-8 object-contain rounded" />
+                  <CdnImg src={g.image_url} alt="" className="w-8 h-8 object-contain rounded" />
                 ) : (
                   <div className="w-8 h-8 rounded bg-white/10" />
                 )}
@@ -1116,7 +1117,7 @@ function CpRewardSlotsEditor({
                   placeholder="Reward label"
                 />
                 {item.image_url || shop?.image_url ? (
-                  <img
+                  <CdnImg
                     src={item.image_url || shop?.image_url}
                     alt=""
                     className="w-10 h-10 object-contain rounded bg-black/40"

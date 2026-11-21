@@ -1,5 +1,6 @@
 "use server";
 import { randomUUID } from "crypto";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
 function safeStorageObjectKey(folder: string, originalName: string, fallbackExt: string) {
@@ -56,14 +57,12 @@ async function uploadCPNestAsset(formData: FormData, kind: "image" | "svga") {
     const fileName = safeStorageObjectKey(folder, file.name, isSvga ? "svga" : "png");
     const buffer = Buffer.from(await file.arrayBuffer());
     const contentType = isSvga ? "application/octet-stream" : file.type || "image/png";
-    const { error } = await supabaseAdmin.storage.from("cp_nest_assets").upload(fileName, buffer, {
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "cp_nest_assets",
+      objectPath: fileName,
+      body: buffer,
       contentType,
-      upsert: true,
     });
-    if (error) throw error;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("cp_nest_assets").getPublicUrl(fileName);
     return { success: true, url: publicUrl };
   } catch (error: any) {
     console.error("Error uploading CP nest asset:", error);

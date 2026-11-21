@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Image as ImageIcon, Loader2, Search } from "lucide-react";
@@ -138,7 +139,7 @@ export function BdGiftPackEditor({
             <div className="flex flex-wrap items-center gap-4">
               <div className="flex items-center gap-3">
                 {lv.badge_url ? (
-                  <img
+                  <CdnImg
                     src={lv.badge_url}
                     alt={`LV${lv.level}`}
                     className="w-14 h-14 object-contain"
@@ -183,7 +184,7 @@ export function BdGiftPackEditor({
                     </p>
                     <div className="h-16 rounded-lg bg-black/40 flex items-center justify-center overflow-hidden">
                       {img ? (
-                        <img src={img} alt="" className="max-h-14 object-contain" />
+                        <CdnImg src={img} alt="" className="max-h-14 object-contain" />
                       ) : (
                         <span className="text-[10px] text-white/30">Not set</span>
                       )}

@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -160,7 +161,7 @@ export function HomeGamesRowManager({
                 </td>
                 <td className="p-4">
                   {item.image_url ? (
-                    <img
+                    <CdnImg
                       src={item.image_url}
                       alt=""
                       className="w-12 h-12 rounded-2xl object-cover border border-white/10"
@@ -291,7 +292,7 @@ export function HomeGamesRowManager({
               onChange={handleUpload}
             />
             {editing.image_url ? (
-              <img
+              <CdnImg
                 src={editing.image_url}
                 alt=""
                 className="w-14 h-14 rounded-2xl object-cover border border-white/10"

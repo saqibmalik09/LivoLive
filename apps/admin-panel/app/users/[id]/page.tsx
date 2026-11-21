@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { CountryFlag } from "@/components/CountryFlag";
 import { UserActions } from "@/components/UserActions";
@@ -382,7 +383,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
             <div className="absolute inset-0 bg-purple-500 blur-2xl opacity-20 group-hover:opacity-40 transition-opacity rounded-full" />
             <div className="w-32 h-32 rounded-3xl bg-black/40 border-2 border-white/10 flex items-center justify-center overflow-hidden relative z-10">
               {user.avatar_url ? (
-                <img
+                <CdnImg
                   src={user.avatar_url}
                   alt={user.username}
                   className="w-full h-full object-cover"

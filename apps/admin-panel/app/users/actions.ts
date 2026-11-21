@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { auditUserLabel, logAdminAction } from "@/lib/admin-audit";
 import { revalidatePath } from "next/cache";
 function revalidateUserPaths(userId: string, staffId?: string | null) {
@@ -837,15 +838,12 @@ export async function uploadUserMedia(formData: FormData) {
         ? "users/media"
         : "users/avatars";
     const fileName = `${folder}/${kind}-${Date.now()}-${safeBase}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("app_assets");
-    const { error: uploadError } = await bucket.upload(fileName, buffer, {
-      contentType,
-      upsert: true,
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType: contentType,
     });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = bucket.getPublicUrl(fileName);
     return { success: true as const, url: publicUrl };
   } catch (error: any) {
     console.error("Error uploading user media:", error);

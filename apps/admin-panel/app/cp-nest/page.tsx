@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { Plus, Heart, Search } from "lucide-react";
 import Link from "next/link";
@@ -83,7 +84,7 @@ export default async function CPNestPage({
           >
             <div className="aspect-square rounded-2xl bg-black/40 border border-white/5 overflow-hidden flex items-center justify-center relative mb-6">
               {item.image_url ? (
-                <img
+                <CdnImg
                   src={item.image_url}
                   alt={item.name}
                   className="w-4/5 h-4/5 object-contain group-hover:scale-110 transition-transform duration-500"

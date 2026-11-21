@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { Image as ImageIcon } from "lucide-react";
 import type { LevelRewardsMap } from "@/lib/actions/levels";
 const REWARD_SLOTS = [
@@ -28,7 +29,7 @@ export function LevelRewardsEditor({ rewards, onSelect, onClear }: LevelRewardsE
               className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
             >
               {reward?.image_url ? (
-                <img
+                <CdnImg
                   src={reward.image_url}
                   alt={reward.name ?? slot.label}
                   className="h-12 w-12 rounded-lg object-contain bg-black/20"
@@ -77,7 +78,7 @@ export function LevelRewardsSummary({ rewards }: { rewards?: LevelRewardsMap }) 
         {REWARD_SLOTS.map((slot) => {
           const reward = rewards?.[slot.key];
           return reward?.image_url ? (
-            <img
+            <CdnImg
               key={slot.key}
               src={reward.image_url}
               alt={slot.label}

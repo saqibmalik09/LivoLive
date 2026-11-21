@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase";
 import { ShieldCheck, Clock, CheckCircle2, XCircle, ChevronRight, User } from "lucide-react";
@@ -64,7 +65,7 @@ export default async function RealNameListPage() {
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-2xl bg-sky-500/10 overflow-hidden flex items-center justify-center">
                   {user?.avatar_url ? (
-                    <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+                    <CdnImg src={user.avatar_url} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <User className="text-sky-300" size={20} />
                   )}

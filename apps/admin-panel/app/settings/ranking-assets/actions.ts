@@ -5,6 +5,7 @@ import {
   resolveRankingAssetContentType,
   resolveRankingAssetExtension,
 } from "@/lib/ranking-asset-media";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type RankingAssetCategory =
   | "Room"
@@ -50,15 +51,12 @@ export async function uploadRankingAsset(formData: FormData) {
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const contentType = resolveRankingAssetContentType(fileEntry, originalName);
     const fileName = `ranking-assets/${category.toLowerCase()}-${rankingType}-r${rankPosition}-${field}-${Date.now()}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("app_assets");
-    let uploadError = (await bucket.upload(fileName, buffer, { contentType, upsert: true })).error;
-    if (uploadError && isSvga) {
-      uploadError = (await bucket.upload(fileName, buffer, { upsert: true })).error;
-    }
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const frameMediaType = field === "frame" ? (isSvga ? "svga" : "image") : "image";
     const urlColumn = field === "badge" ? "badge_url" : "frame_url";
     const { data: existing, error: findError } = await supabaseAdmin

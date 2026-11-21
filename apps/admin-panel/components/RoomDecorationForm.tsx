@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -147,7 +148,7 @@ export function RoomDecorationForm({ item }: RoomDecorationFormProps) {
         <div className="glass-card overflow-hidden p-0">
           <div className="aspect-[9/16] max-h-[420px] mx-auto bg-black/60 flex items-center justify-center border-b border-white/5 relative">
             {mediaKind === "image" && imageUrl ? (
-              <img src={imageUrl} alt="Preview" className="w-full h-full object-cover" />
+              <CdnImg src={imageUrl} alt="Preview" className="w-full h-full object-cover" />
             ) : mediaKind === "svga" && svgaUrl ? (
               <div className="flex flex-col items-center gap-3 text-blue-300/80 p-6 text-center">
                 <Sparkles size={48} />

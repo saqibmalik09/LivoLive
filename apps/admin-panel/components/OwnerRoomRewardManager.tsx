@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -395,7 +396,7 @@ export function OwnerRoomRewardManager({
             <div className="flex gap-4 items-start">
               <div className="w-24 h-24 rounded-2xl overflow-hidden bg-black/40 border border-white/10">
                 {editing.image_url ? (
-                  <img src={editing.image_url} alt="" className="w-full h-full object-cover" />
+                  <CdnImg src={editing.image_url} alt="" className="w-full h-full object-cover" />
                 ) : null}
               </div>
               <div className="space-y-2">
@@ -453,7 +454,7 @@ export function OwnerRoomRewardManager({
           {filteredItems.map((item) => (
             <div key={item.id} className="glass-card p-4 space-y-3">
               <div className="aspect-square rounded-2xl overflow-hidden bg-black/40 border border-white/5">
-                <img src={item.image_url} alt="" className="w-full h-full object-cover" />
+                <CdnImg src={item.image_url} alt="" className="w-full h-full object-cover" />
               </div>
               <div className="space-y-1">
                 <p className="text-[9px] font-black uppercase tracking-widest text-sky-300">

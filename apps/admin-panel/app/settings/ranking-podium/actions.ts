@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type PodiumBgSlot = "room" | "agency" | "charm" | "wealth";
 function bgColumn(slot: PodiumBgSlot): string {
@@ -34,16 +35,14 @@ export async function uploadRankingPodiumBg(formData: FormData) {
     const ext = originalName.split(".").pop()?.toLowerCase() || "png";
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const fileName = `ranking-podium/${slot}-${Date.now()}.${ext}`;
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, {
-        contentType: ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png",
-        upsert: true,
-      });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const contentType =
+      ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const { error: dbError } = await supabaseAdmin.from("home_ranking_podium_config").upsert(
       {
         id: 1,

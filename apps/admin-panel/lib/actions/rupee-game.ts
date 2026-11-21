@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type RupeeGameCampaignInput = {
   id?: string;
@@ -186,16 +187,12 @@ export async function uploadRupeeGameImage(formData: FormData) {
     if (!file) throw new Error("No file provided");
     const fileName = `rupee-game/${Date.now()}-${file.name.replace(/\s+/g, "_")}`;
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, {
-        contentType: file.type || "image/png",
-        upsert: true,
-      });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType: file.type || "image/png",
+    });
     return { success: true, url: publicUrl };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

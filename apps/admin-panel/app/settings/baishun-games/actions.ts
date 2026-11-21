@@ -1,5 +1,6 @@
 "use server";
 import { createHash, randomBytes, randomUUID } from "crypto";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 import sharp from "sharp";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -159,16 +160,12 @@ async function encodeOrPassthroughIcon(
 async function uploadIconBuffer(slug: string, buf: Buffer, mimeHint: string) {
   const encoded = await encodeOrPassthroughIcon(buf, mimeHint);
   const fileName = `baishun/${slug}.${encoded.ext}`;
-  const { error } = await supabaseAdmin.storage
-    .from("game-icons")
-    .upload(fileName, encoded.bytes, {
-      contentType: encoded.contentType,
-      upsert: true,
-    });
-  if (error) throw error;
-  const {
-    data: { publicUrl },
-  } = supabaseAdmin.storage.from("game-icons").getPublicUrl(fileName);
+  const { publicUrl } = await uploadPublicBucketToR2({
+    bucket: "game-icons",
+    objectPath: fileName,
+    body: encoded.bytes,
+    contentType: encoded.contentType,
+  });
   return publicUrl;
 }
 

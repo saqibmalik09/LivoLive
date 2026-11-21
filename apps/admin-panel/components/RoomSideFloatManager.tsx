@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -226,7 +227,7 @@ export function RoomSideFloatManager({
           <div className="flex flex-col sm:flex-row gap-5 items-start">
             <div className="w-28 h-28 rounded-2xl overflow-hidden bg-black/50 border border-white/10 flex items-center justify-center shrink-0">
               {editing.image_url ? (
-                <img src={editing.image_url} alt="" className="w-full h-full object-cover" />
+                <CdnImg src={editing.image_url} alt="" className="w-full h-full object-cover" />
               ) : (
                 <span className="text-white/20 text-[10px] uppercase tracking-widest">Square</span>
               )}
@@ -278,7 +279,7 @@ export function RoomSideFloatManager({
         {filtered.map((item) => (
           <div key={item.id} className="glass-card p-4 space-y-3 relative group">
             <div className="aspect-square rounded-2xl overflow-hidden bg-black/40 border border-white/5">
-              <img src={item.image_url} alt={item.title} className="w-full h-full object-cover" />
+              <CdnImg src={item.image_url} alt={item.title} className="w-full h-full object-cover" />
             </div>
             <div className="space-y-1">
               <div className="flex items-center gap-2">

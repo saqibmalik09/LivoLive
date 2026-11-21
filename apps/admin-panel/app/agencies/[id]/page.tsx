@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import {
   ArrowLeft,
@@ -155,7 +156,7 @@ export default async function AgencyDetailPage({ params, searchParams }: AgencyD
         </div>
         <div className="w-28 h-28 rounded-3xl bg-purple-500/20 border-2 border-purple-500/30 flex items-center justify-center overflow-hidden relative z-10">
           {agency.logo_url ? (
-            <img src={agency.logo_url} className="w-full h-full object-cover" />
+            <CdnImg src={agency.logo_url} className="w-full h-full object-cover" />
           ) : (
             <Building2 size={48} className="text-purple-400" />
           )}
@@ -301,7 +302,7 @@ export default async function AgencyDetailPage({ params, searchParams }: AgencyD
                 <div className="flex items-center gap-5">
                   <div className="w-12 h-12 rounded-full bg-white/5 overflow-hidden border border-white/10">
                     {host.users?.avatar_url ? (
-                      <img src={host.users.avatar_url} className="w-full h-full object-cover" />
+                      <CdnImg src={host.users.avatar_url} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-amber-400">
                         <User size={20} />
@@ -397,7 +398,7 @@ export default async function AgencyDetailPage({ params, searchParams }: AgencyD
                   <div className="flex items-center gap-4 min-w-0">
                     <div className="w-12 h-12 rounded-2xl bg-white/5 overflow-hidden border border-white/10 shrink-0">
                       {member.users?.avatar_url ? (
-                        <img src={member.users.avatar_url} className="w-full h-full object-cover" />
+                        <CdnImg src={member.users.avatar_url} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-purple-400">
                           <User size={18} />

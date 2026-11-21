@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -149,7 +150,7 @@ function BandField({
         <div
           className={`w-full ${previewHeight} rounded-xl overflow-hidden bg-black/40 border border-white/5`}
         >
-          <img src={url} alt="" className="w-full h-full object-cover" />
+          <CdnImg src={url} alt="" className="w-full h-full object-cover" />
         </div>
       ) : null}
     </div>

@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { upsertShopItem, deleteShopItem, uploadFile } from "@/app/shop/actions";
@@ -134,7 +135,7 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
                 />
               </div>
             ) : imageUrl ? (
-              <img
+              <CdnImg
                 src={storageThumbUrl(imageUrl, 480)}
                 alt="Preview"
                 referrerPolicy="no-referrer"

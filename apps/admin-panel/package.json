@@ -32,7 +32,8 @@
     "seed-room-contribution-demo": "node scripts/seed-room-contribution-demo.mjs",
     "seed-bulk-demo": "node scripts/seed-bulk-demo.mjs",
     "clear-mock-users": "node scripts/clear-mock-users.mjs",
-    "bulk-upload-room-emojis": "node scripts/bulk-upload-room-mic-emojis.mjs"
+    "bulk-upload-room-emojis": "node scripts/bulk-upload-room-mic-emojis.mjs",
+    "generate-r2-webp-thumbs": "node scripts/generate-r2-webp-thumbs.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
@@ -45,6 +46,7 @@
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
     "server-only": "^0.0.1",
+    "sharp": "^0.35.2",
     "sonner": "^2.0.7",
     "svgaplayerweb": "^2.3.2",
     "tailwind-merge": "^3.5.0"
@@ -56,7 +58,6 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
-    "sharp": "^0.35.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

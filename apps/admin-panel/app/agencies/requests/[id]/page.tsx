@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { ArrowLeft, User, MessageSquare, CheckCircle2, Calendar, ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -33,7 +34,7 @@ export default async function RequestDetailPage({ params }: RequestDetailProps) 
             <div className="w-32 h-32 rounded-full border-4 border-amber-500/30 p-1 mx-auto mb-6 relative">
               <div className="w-full h-full rounded-full overflow-hidden bg-white/5 border border-white/10">
                 {app.users?.avatar_url ? (
-                  <img src={app.users.avatar_url} className="w-full h-full object-cover" />
+                  <CdnImg src={app.users.avatar_url} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-amber-400">
                     <User size={48} />

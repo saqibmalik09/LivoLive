@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -294,7 +295,7 @@ function SlotField({
             controls
           />
         ) : (
-          <img src={url} alt="" className="w-full max-h-40 rounded-xl object-cover" />
+          <CdnImg src={url} alt="" className="w-full max-h-40 rounded-xl object-cover" />
         )
       ) : (
         <p className="text-white/30 text-sm">No media — app uses bundled fallback</p>

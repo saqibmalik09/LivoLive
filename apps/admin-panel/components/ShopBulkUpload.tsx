@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { bulkCreateShopItems, uploadFile, type BulkShopItemInput } from "@/app/shop/actions";
@@ -308,7 +309,7 @@ export function ShopBulkUpload({
                   mediaType="svga"
                 />
               ) : (
-                <img
+                <CdnImg
                   src={row.previewSrc}
                   alt={row.name}
                   className="w-full max-h-40 object-contain rounded-xl bg-black/40"

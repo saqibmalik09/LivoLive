@@ -794,11 +794,11 @@ export async function getStaffDrilldown(
   if (hostUserIds.length > 0) {
     const { data: payouts } = await supabaseAdmin
       .from('host_salary_payouts')
-      .select('total_amount, beneficiary_user_id')
+      .select('amount, beneficiary_user_id')
       .eq('period_id', periodId)
       .in('beneficiary_user_id', hostUserIds);
     for (const p of payouts || []) {
-      periodSalaryPaid += Number(p.total_amount || 0) || 0;
+      periodSalaryPaid += Number(p.amount || 0) || 0;
     }
   }
 

@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase";
 export type AdminRoomRow = {
   id: string;
@@ -94,15 +95,12 @@ export async function uploadRoomBannerImage(formData: FormData) {
       .replace(/\.[^.]+$/, "")
       .slice(0, 40);
     const fileName = `rooms/banners/${Date.now()}-${safeBase}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("app_assets");
-    const { error: uploadError } = await bucket.upload(fileName, buffer, {
-      contentType,
-      upsert: true,
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType: contentType,
     });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = bucket.getPublicUrl(fileName);
     return { success: true as const, url: publicUrl };
   } catch (error: any) {
     console.error("uploadRoomBannerImage:", error);

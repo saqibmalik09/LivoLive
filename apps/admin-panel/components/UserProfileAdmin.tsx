@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { User, Layers, Sparkles, Home, Loader2, Upload, Trash2, Crown, Award } from "lucide-react";
@@ -328,7 +329,7 @@ export function UserProfileAdmin({
               />
             </div>
             {profileAvatar ? (
-              <img
+              <CdnImg
                 src={profileAvatar}
                 alt=""
                 className="mt-2 w-16 h-16 rounded-xl object-cover border border-white/10"
@@ -364,7 +365,7 @@ export function UserProfileAdmin({
               />
             </div>
             {profileBanner ? (
-              <img
+              <CdnImg
                 src={profileBanner}
                 alt=""
                 className="mt-2 w-full h-20 rounded-xl object-cover border border-white/10"
@@ -483,7 +484,7 @@ export function UserProfileAdmin({
                 className="flex items-center gap-3 p-3 rounded-xl bg-black/30 border border-white/5"
               >
                 {row.imageUrl ? (
-                  <img
+                  <CdnImg
                     src={row.imageUrl}
                     alt=""
                     className="w-10 h-10 rounded-lg object-contain bg-black/40"
@@ -799,7 +800,7 @@ export function UserProfileAdmin({
                   className="flex items-center gap-2 rounded-xl bg-black/30 border border-white/10 px-3 py-2"
                 >
                   {row.imageUrl ? (
-                    <img src={row.imageUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
+                    <CdnImg src={row.imageUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
                   ) : (
                     <div className="w-8 h-8 rounded-lg bg-white/5" />
                   )}
@@ -867,7 +868,7 @@ export function UserProfileAdmin({
                 >
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     {row.imageUrl ? (
-                      <img
+                      <CdnImg
                         src={row.imageUrl}
                         alt=""
                         className="w-12 h-12 rounded-lg object-cover shrink-0"
@@ -991,7 +992,7 @@ export function UserProfileAdmin({
               <span className={labelClass}>Room card / banner URL</span>
               {roomImage ? (
                 <div className="aspect-[16/9] max-w-xs rounded-xl overflow-hidden border border-white/10 mb-2">
-                  <img src={roomImage} alt="Room banner" className="w-full h-full object-cover" />
+                  <CdnImg src={roomImage} alt="Room banner" className="w-full h-full object-cover" />
                 </div>
               ) : null}
               <div className="flex gap-2">

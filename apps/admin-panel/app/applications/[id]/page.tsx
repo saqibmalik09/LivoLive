@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import {
   ArrowLeft,
@@ -62,7 +63,7 @@ export default async function AgencyAppPage({ params }: AgencyAppPageProps) {
             <div className="w-32 h-32 rounded-full border-4 border-purple-500/30 p-1 mx-auto mb-6 relative">
               <div className="w-full h-full rounded-full overflow-hidden bg-white/5 border border-white/10">
                 {app.users?.avatar_url ? (
-                  <img src={app.users.avatar_url} className="w-full h-full object-cover" />
+                  <CdnImg src={app.users.avatar_url} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-purple-400">
                     <User size={48} />
@@ -260,7 +261,7 @@ function HostCard({ host }: { host: any }) {
       <div className="flex items-center gap-5">
         <div className="w-12 h-12 rounded-full bg-white/5 overflow-hidden border border-white/10">
           {host.users?.avatar_url ? (
-            <img src={host.users.avatar_url} className="w-full h-full object-cover" />
+            <CdnImg src={host.users.avatar_url} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-pink-400">
               <User size={20} />

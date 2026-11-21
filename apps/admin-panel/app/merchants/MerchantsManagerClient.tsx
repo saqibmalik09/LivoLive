@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -243,7 +244,7 @@ export function MerchantsManagerClient({
                   <div className="w-10 h-10 rounded-lg overflow-hidden bg-white/10 shrink-0">
                     {c.avatar_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.avatar_url} alt="" className="w-full h-full object-cover" />
+                      <CdnImg src={c.avatar_url} alt="" className="w-full h-full object-cover" />
                     ) : null}
                   </div>
                   <div className="min-w-0">
@@ -298,7 +299,7 @@ export function MerchantsManagerClient({
                   <div className="w-12 h-12 rounded-xl overflow-hidden bg-white/10 shrink-0">
                     {m.avatar_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={m.avatar_url} alt="" className="w-full h-full object-cover" />
+                      <CdnImg src={m.avatar_url} alt="" className="w-full h-full object-cover" />
                     ) : null}
                   </div>
                   <div className="min-w-0">

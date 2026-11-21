@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import {
   FileText,
@@ -77,7 +78,7 @@ export default async function ApplicationsPage() {
               <div className="flex items-center gap-6">
                 <div className="w-14 h-14 rounded-2xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center">
                   {app.users?.avatar_url ? (
-                    <img src={app.users.avatar_url} className="w-full h-full object-cover" />
+                    <CdnImg src={app.users.avatar_url} className="w-full h-full object-cover" />
                   ) : (
                     <User size={24} className="text-purple-400" />
                   )}

@@ -1,9 +1,3 @@
-/*
- * Livo / SK Live Party
- * App maintenance & design by NoxLab AI - https://noxlabai.com
- * Contact: https://noxlabai.com/quote | https://noxlabai.com/book
- * (c) 2026 NoxLab AI - maintenance and design updates
- */
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';

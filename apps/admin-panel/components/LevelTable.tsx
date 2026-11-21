@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { Fragment, useState } from "react";
 import { Edit2, Trash2, Check, X, Plus, Image as ImageIcon, Loader2 } from "lucide-react";
 import {
@@ -239,7 +240,7 @@ export function LevelTable({ category, initialLevels }: LevelTableProps) {
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
                           {newData.badge_url ? (
-                            <img
+                            <CdnImg
                               src={newData.badge_url}
                               alt="New Badge"
                               className="h-8 w-8 object-contain"
@@ -356,7 +357,7 @@ export function LevelTable({ category, initialLevels }: LevelTableProps) {
                             {isEditing ? (
                               <>
                                 {editData.badge_url ? (
-                                  <img
+                                  <CdnImg
                                     src={editData.badge_url}
                                     alt="Badge"
                                     className="h-8 w-8 object-contain"
@@ -382,7 +383,7 @@ export function LevelTable({ category, initialLevels }: LevelTableProps) {
                                 </label>
                               </>
                             ) : level.badge_url ? (
-                              <img
+                              <CdnImg
                                 src={level.badge_url}
                                 alt="Badge"
                                 className="h-8 w-8 object-contain"

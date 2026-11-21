@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type HotCardSlot = "carousel_1" | "carousel_2" | "carousel_3" | "party_card" | "music_card";
 export type HotCardMediaType = "image" | "svga" | "video";
@@ -147,13 +148,12 @@ export async function uploadHotCardMedia(formData: FormData) {
     const fileName = `hot-cards/${slot}-${Date.now()}.${safeExt}`;
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const contentType = resolveContentType(fileEntry, originalName);
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, { contentType, upsert: true });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const { error: dbError } = await supabaseAdmin.from("home_hot_cards_config").upsert(
       {
         id: 1,

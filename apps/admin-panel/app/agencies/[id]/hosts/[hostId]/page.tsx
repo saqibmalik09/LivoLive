@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { ArrowLeft, User, BarChart3, Clock, Calendar, Zap } from "lucide-react";
 import Link from "next/link";
@@ -65,7 +66,7 @@ export default async function HostDetailPage({ params, searchParams }: HostDetai
             <div className="w-32 h-32 rounded-full border-4 border-purple-500/30 p-1 mx-auto mb-6 relative z-10">
               <div className="w-full h-full rounded-full overflow-hidden bg-white/5 border border-white/10">
                 {host.avatar_url ? (
-                  <img src={host.avatar_url} className="w-full h-full object-cover" alt="" />
+                  <CdnImg src={host.avatar_url} className="w-full h-full object-cover" alt="" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-purple-400">
                     <User size={48} />

@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { Fragment, useState } from "react";
 import { Edit2, Trash2, Check, X, Plus, Image as ImageIcon, Loader2 } from "lucide-react";
 import {
@@ -177,7 +178,7 @@ export function AgencyLevelTable({ initialLevels }: AgencyLevelTableProps) {
   };
   const renderAssetThumb = (url?: string | null) =>
     url ? (
-      <img src={url} alt="" className="h-8 w-8 object-contain" />
+      <CdnImg src={url} alt="" className="h-8 w-8 object-contain" />
     ) : (
       <div className="flex h-8 w-8 items-center justify-center rounded bg-white/5 text-white/20">
         <ImageIcon size={14} />

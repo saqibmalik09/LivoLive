@@ -1,5 +1,6 @@
 "use server";
 import { randomUUID } from "crypto";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
 function safeStorageObjectKey(folder: string, originalName: string, fallbackExt: string) {
@@ -90,16 +91,12 @@ async function uploadRoomDecorationAsset(formData: FormData, kind: "image" | "sv
     const contentType = isSvga
       ? "application/octet-stream"
       : file.type || "application/octet-stream";
-    const { error } = await supabaseAdmin.storage
-      .from("room_backgrounds")
-      .upload(fileName, buffer, {
-        contentType,
-        upsert: true,
-      });
-    if (error) throw error;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("room_backgrounds").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "room_backgrounds",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     return { success: true, url: publicUrl };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

@@ -1,5 +1,6 @@
 "use server";
 import { randomUUID } from "crypto";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase";
 function intervalToSeconds(value: unknown): number {
@@ -606,14 +607,12 @@ export async function uploadGameIcon(formData: FormData) {
       : "png";
     const fileName = `admin/${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { error } = await supabaseAdmin.storage.from("game-icons").upload(fileName, buffer, {
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "game-icons",
+      objectPath: fileName,
+      body: buffer,
       contentType: file.type || "image/png",
-      upsert: true,
     });
-    if (error) throw error;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("game-icons").getPublicUrl(fileName);
     return { success: true, url: publicUrl };
   } catch (e: any) {
     return { success: false, error: e?.message || "Upload failed" };

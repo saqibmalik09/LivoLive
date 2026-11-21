@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { countryFlagImageUrl, normalizeCountryCode } from "@/lib/countryFlag";
 interface CountryFlagProps {
   code?: string | null;
@@ -20,7 +21,7 @@ export function CountryFlag({ code, size = 22, className = "" }: CountryFlagProp
   }
   const height = Math.round(size * 0.72);
   return (
-    <img
+    <CdnImg
       src={src}
       width={size}
       height={height}

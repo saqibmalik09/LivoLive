@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useCallback, useEffect, useState } from "react";
 import {
   addGameVisibilityUser,
@@ -232,7 +233,7 @@ function GameAudienceModal({
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-white/5 disabled:opacity-40"
                         >
                           {u.avatar_url ? (
-                            <img
+                            <CdnImg
                               src={u.avatar_url}
                               alt=""
                               className="h-8 w-8 rounded-full object-cover"
@@ -282,7 +283,7 @@ function GameAudienceModal({
                         className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/25 px-3 py-2"
                       >
                         {u.avatar_url ? (
-                          <img
+                          <CdnImg
                             src={u.avatar_url}
                             alt=""
                             className="h-8 w-8 rounded-full object-cover"

@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 type BandVariant = "top" | "bottom";
 function resolveContentType(file: Blob, fileName: string): string {
@@ -62,24 +63,12 @@ export async function uploadPartyScreenImage(formData: FormData) {
     const fileName = `party-screen/${variant}-${Date.now()}.${safeExt}`;
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const contentType = resolveContentType(fileEntry, originalName);
-    let uploadError = (
-      await supabaseAdmin.storage.from("app_assets").upload(fileName, buffer, {
-        contentType,
-        upsert: true,
-      })
-    ).error;
-    if (uploadError && contentType !== "application/octet-stream") {
-      uploadError = (
-        await supabaseAdmin.storage.from("app_assets").upload(fileName, buffer, {
-          contentType: "application/octet-stream",
-          upsert: true,
-        })
-      ).error;
-    }
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const column = columnForVariant(variant as BandVariant);
     const { error: dbError } = await supabaseAdmin.from("party_screen_config").upsert(
       {

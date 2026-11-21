@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -40,7 +41,7 @@ export function MerchantsClient({ merchants }: { merchants: Merchant[] }) {
           <div className="flex items-center gap-4 min-w-0">
             <div className="w-12 h-12 rounded-xl overflow-hidden bg-white/10 shrink-0">
               {m.avatar_url ? (
-                <img src={m.avatar_url} alt="" className="w-full h-full object-cover" />
+                <CdnImg src={m.avatar_url} alt="" className="w-full h-full object-cover" />
               ) : null}
             </div>
             <div className="min-w-0">

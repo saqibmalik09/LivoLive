@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -121,7 +122,7 @@ export function CPNestItemForm({ item }: CPNestItemFormProps) {
                 <p className="text-[10px] text-white/40 break-all">{svgaUrl.split("/").pop()}</p>
               </div>
             ) : imageUrl ? (
-              <img src={imageUrl} alt="Preview" className="w-4/5 h-4/5 object-contain" />
+              <CdnImg src={imageUrl} alt="Preview" className="w-4/5 h-4/5 object-contain" />
             ) : (
               <Heart size={64} className="text-pink-500/20" />
             )}

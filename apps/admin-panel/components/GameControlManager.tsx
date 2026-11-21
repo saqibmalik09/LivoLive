@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState, type ReactNode } from "react";
 import {
   saveGameControlMode,
@@ -631,7 +632,7 @@ export function GameControlManager({
                   <div className="flex items-center gap-4 flex-1 min-w-0">
                     <div className="w-14 h-14 rounded-2xl bg-black/50 border border-white/10 overflow-hidden flex items-center justify-center shrink-0">
                       {game.icon_url ? (
-                        <img
+                        <CdnImg
                           src={game.icon_url}
                           alt={game.name}
                           className="w-full h-full object-cover"

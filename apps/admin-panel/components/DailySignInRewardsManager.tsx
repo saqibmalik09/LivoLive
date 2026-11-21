@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -91,7 +92,7 @@ export function DailySignInRewardsManager({
 
             <div className="w-20 h-20 shrink-0 rounded-2xl bg-black/30 border border-white/10 overflow-hidden flex items-center justify-center">
               {preview ? (
-                <img src={preview} alt="" className="w-full h-full object-contain" />
+                <CdnImg src={preview} alt="" className="w-full h-full object-contain" />
               ) : (
                 <span className="text-white/20 text-xs">No img</span>
               )}

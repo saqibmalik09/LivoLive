@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
@@ -94,7 +95,7 @@ export default async function RealNameDetailPage({
             <div key={label} className="glass-card overflow-hidden">
               <div className="aspect-video bg-black/40 flex items-center justify-center">
                 {url ? (
-                  <img src={url} alt={label} className="w-full h-full object-cover" />
+                  <CdnImg src={url} alt={label} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-white/30 text-xs">Missing</span>
                 )}

@@ -24,14 +24,14 @@ export const ROLE_LABELS: Record<string, string> = {
 
 export const SALARY_HUB_PERIOD_COOKIE = 'salary_hub_period';
 
-const PERIOD_RE = /^(\d{4})-(\d{2})-([AB])$/i;
+const PERIOD_RE = /^(\d{4})-(\d{2})-([ABM])$/i;
 
 /** Current 15-day period id: YYYY-MM-A (1–15) or YYYY-MM-B (16–end). */
 export function currentPeriodId(date = new Date()): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
-  const day = date.getDate();
-  return day <= 15 ? `${y}-${m}-A` : `${y}-${m}-B`;
+  // One period per calendar month; the 15th no longer splits it.
+  return `${y}-${m}-M`;
 }
 
 export function prevPeriodId(date = new Date()): string {
@@ -51,20 +51,20 @@ export function isValidPeriodId(periodId: string | null | undefined): boolean {
 
 export function parsePeriodId(
   periodId: string,
-): { year: number; month: number; half: 'A' | 'B' } | null {
+): { year: number; month: number; half: 'A' | 'B' | 'M' } | null {
   const match = periodId.match(PERIOD_RE);
   if (!match) return null;
   return {
     year: Number(match[1]),
     month: Number(match[2]),
-    half: match[3].toUpperCase() as 'A' | 'B',
+    half: match[3].toUpperCase() as 'A' | 'B' | 'M',
   };
 }
 
 export function buildPeriodId(
   year: number,
   month: number,
-  half: 'A' | 'B',
+  half: 'A' | 'B' | 'M',
 ): string {
   return `${year}-${String(month).padStart(2, '0')}-${half}`;
 }
@@ -79,8 +79,7 @@ export function listSelectablePeriods(
   for (let i = 0; i < monthsBack; i++) {
     const y = d.getFullYear();
     const m = d.getMonth() + 1;
-    out.push(buildPeriodId(y, m, 'B'));
-    out.push(buildPeriodId(y, m, 'A'));
+    out.push(buildPeriodId(y, m, 'M'));
     d.setMonth(d.getMonth() - 1);
   }
   return out;

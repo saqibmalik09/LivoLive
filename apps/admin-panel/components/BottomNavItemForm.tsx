@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -210,7 +211,7 @@ function AssetField({
       </div>
       {url ? (
         <div className="h-16 w-16 rounded-xl bg-black/40 border border-white/5 flex items-center justify-center p-2">
-          <img src={url} alt="" className="max-h-full max-w-full object-contain" />
+          <CdnImg src={url} alt="" className="max-h-full max-w-full object-contain" />
         </div>
       ) : null}
     </div>

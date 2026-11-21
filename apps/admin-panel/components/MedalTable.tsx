@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState } from "react";
 import { Edit2, Check, X, Medal as MedalIcon } from "lucide-react";
 import { updateMedalConfig } from "@/lib/actions/medals";
@@ -59,7 +60,7 @@ export function MedalTable({ initialMedals }: MedalTableProps) {
                   <tr key={medal.id} className="hover:bg-white/[0.02] transition-colors group">
                     <td className="px-6 py-4">
                       <div className="w-12 h-12 rounded-xl bg-black/40 border border-white/5 p-2 flex items-center justify-center">
-                        <img
+                        <CdnImg
                           src={medal.image_url}
                           alt={medal.name}
                           className="w-full h-full object-contain"

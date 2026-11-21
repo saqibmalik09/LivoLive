@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import Link from "next/link";
 import { Crown, Plus, Smile } from "lucide-react";
 import { listRoomMicEmojisAdmin } from "@/app/settings/room-emojis/actions";
@@ -33,7 +34,7 @@ export default async function RoomEmojisPage() {
             className="glass-card group hover:border-amber-500/30 transition-all p-4 overflow-hidden relative"
           >
             <div className="aspect-square rounded-2xl bg-black/40 border border-white/5 overflow-hidden flex items-center justify-center relative mb-4">
-              <img
+              <CdnImg
                 src={emoji.image_url}
                 alt={emoji.name}
                 className="w-4/5 h-4/5 object-contain group-hover:scale-110 transition-transform duration-500"

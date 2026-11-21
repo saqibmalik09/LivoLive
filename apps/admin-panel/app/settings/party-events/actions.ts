@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type PartyEventKind =
   "cp_native" | "webview" | "weekly_star_native" | "game_star_native" | "sk_host_native";
@@ -283,21 +284,18 @@ export async function uploadPartyEventBanner(formData: FormData) {
     const ext = originalName.split(".").pop()?.toLowerCase() || "png";
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const fileName = `party-events/${eventId}-${Date.now()}.${ext}`;
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, {
-        contentType:
-          ext === "jpg" || ext === "jpeg"
-            ? "image/jpeg"
-            : ext === "webp"
-              ? "image/webp"
-              : "image/png",
-        upsert: true,
-      });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const contentType =
+      ext === "jpg" || ext === "jpeg"
+        ? "image/jpeg"
+        : ext === "webp"
+          ? "image/webp"
+          : "image/png";
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     const { error: dbError } = await supabaseAdmin
       .from("party_events")
       .update({
@@ -418,21 +416,18 @@ export async function uploadCpEventRewardImage(formData: FormData) {
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const safeSlot = slotKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const fileName = `party-events/rewards/${eventId}-${safeSlot}-${Date.now()}.${ext}`;
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from("app_assets")
-      .upload(fileName, buffer, {
-        contentType:
-          ext === "jpg" || ext === "jpeg"
-            ? "image/jpeg"
-            : ext === "webp"
-              ? "image/webp"
-              : "image/png",
-        upsert: true,
-      });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("app_assets").getPublicUrl(fileName);
+    const contentType =
+      ext === "jpg" || ext === "jpeg"
+        ? "image/jpeg"
+        : ext === "webp"
+          ? "image/webp"
+          : "image/png";
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     revalidatePath("/settings/party-events");
     return { success: true, url: publicUrl };
   } catch (error: unknown) {

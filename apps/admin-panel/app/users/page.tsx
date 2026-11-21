@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { CountryFlag } from "@/components/CountryFlag";
 import { Search, User, Coins, Diamond, ShieldAlert, ChevronRight, ChevronLeft } from "lucide-react";
@@ -125,7 +126,7 @@ export default async function UsersPage({ searchParams }: UsersPageProps) {
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-white/10 flex items-center justify-center overflow-hidden">
                         {user.avatar_url ? (
-                          <img
+                          <CdnImg
                             src={user.avatar_url}
                             alt={user.username}
                             className="w-full h-full object-cover"

@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useEffect, useState } from "react";
 import { Loader2, Search, X } from "lucide-react";
 import { searchShopItemsForReward } from "@/lib/actions/shop-picker";
@@ -103,7 +104,7 @@ export function ShopItemPickerModal({
                   className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-left transition-colors hover:border-amber-500/40 hover:bg-white/10"
                 >
                   {item.image_url ? (
-                    <img
+                    <CdnImg
                       src={storageThumbUrl(item.image_url, 96)}
                       alt={item.name}
                       loading="lazy"

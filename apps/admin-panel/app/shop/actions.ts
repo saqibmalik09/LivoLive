@@ -2,6 +2,7 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { revalidatePath } from "next/cache";
 import { isSvgaRankingAsset, resolveRankingAssetContentType } from "@/lib/ranking-asset-media";
+import { uploadShopAssetToR2 } from "@/lib/r2";
 export async function upsertShopItem(data: any) {
   try {
     const { id, ...updateData } = data;
@@ -20,6 +21,7 @@ export async function upsertShopItem(data: any) {
     return { success: false, error: error.message };
   }
 }
+/** Shop / gift / level media → Cloudflare R2 only (CDN public URL in DB). */
 export async function uploadFile(formData: FormData) {
   try {
     const fileEntry = formData.get("file");
@@ -33,19 +35,12 @@ export async function uploadFile(formData: FormData) {
     const contentType = resolveRankingAssetContentType(fileEntry, originalName);
     const fileName = `${Date.now()}-${safeName}`;
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
-    let { error } = await supabaseAdmin.storage.from("shop_assets").upload(fileName, buffer, {
+    // Original + R2 WebP thumbs (t/w*_q90/…) for fast app tiles — no Supabase render.
+    const { publicUrl } = await uploadShopAssetToR2({
+      key: fileName,
+      body: buffer,
       contentType,
-      upsert: true,
     });
-    if (error && isSvga) {
-      ({ error } = await supabaseAdmin.storage
-        .from("shop_assets")
-        .upload(fileName, buffer, { upsert: true }));
-    }
-    if (error) throw error;
-    const {
-      data: { publicUrl },
-    } = supabaseAdmin.storage.from("shop_assets").getPublicUrl(fileName);
     return { success: true as const, url: publicUrl, isSvga };
   } catch (error: any) {
     console.error("Error uploading file:", error);

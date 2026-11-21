@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState, useRef } from "react";
 import { upsertCategory, deleteCategory } from "./actions";
 import { uploadFile } from "../actions";
@@ -61,7 +62,7 @@ export function CategoryManager({ initialCategories }: { initialCategories: any[
 
             <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center overflow-hidden border border-white/5">
               {cat.icon_url ? (
-                <img src={cat.icon_url} alt="" className="w-8 h-8 object-contain" />
+                <CdnImg src={cat.icon_url} alt="" className="w-8 h-8 object-contain" />
               ) : (
                 <ImageIcon size={20} className="text-white/10" />
               )}

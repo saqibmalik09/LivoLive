@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { Gift, Loader2, Search, User, X } from "lucide-react";
 import {
@@ -261,7 +262,7 @@ export function ShopSendItemModal({ itemId, itemName, defaultDays, open, onClose
 function UserAvatar({ user }: { user: ShopUserSearchResult }) {
   if (user.avatar_url) {
     return (
-      <img
+      <CdnImg
         src={user.avatar_url}
         alt=""
         className="w-10 h-10 rounded-full object-cover border border-white/10 shrink-0"

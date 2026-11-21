@@ -1,6 +1,6 @@
 /** 15-day A/B period helpers (YYYY-MM-A / YYYY-MM-B). */
 
-const PERIOD_RE = /^(\d{4})-(\d{2})-([AB])$/i;
+const PERIOD_RE = /^(\d{4})-(\d{2})-([ABM])$/i;
 
 export const NETWORK_PERIOD_COOKIE = 'portal_network_period';
 
@@ -16,8 +16,8 @@ export const NETWORK_ROLES: { id: NetworkRole; label: string }[] = [
 export function currentPeriodId(date = new Date()): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
-  const day = date.getDate();
-  return day <= 15 ? `${y}-${m}-A` : `${y}-${m}-B`;
+  // One period per calendar month; the 15th no longer splits it.
+  return `${y}-${m}-M`;
 }
 
 export function isValidPeriodId(periodId: string | null | undefined): boolean {
@@ -26,17 +26,17 @@ export function isValidPeriodId(periodId: string | null | undefined): boolean {
 
 export function parsePeriodId(
   periodId: string,
-): { year: number; month: number; half: 'A' | 'B' } | null {
+): { year: number; month: number; half: 'A' | 'B' | 'M' } | null {
   const match = periodId.match(PERIOD_RE);
   if (!match) return null;
   return {
     year: Number(match[1]),
     month: Number(match[2]),
-    half: match[3].toUpperCase() as 'A' | 'B',
+    half: match[3].toUpperCase() as 'A' | 'B' | 'M',
   };
 }
 
-export function buildPeriodId(year: number, month: number, half: 'A' | 'B'): string {
+export function buildPeriodId(year: number, month: number, half: 'A' | 'B' | 'M'): string {
   return `${year}-${String(month).padStart(2, '0')}-${half}`;
 }
 
@@ -46,8 +46,7 @@ export function listSelectablePeriods(monthsBack = 12, date = new Date()): strin
   for (let i = 0; i < monthsBack; i++) {
     const y = d.getFullYear();
     const m = d.getMonth() + 1;
-    out.push(buildPeriodId(y, m, 'B'));
-    out.push(buildPeriodId(y, m, 'A'));
+    out.push(buildPeriodId(y, m, 'M'));
     d.setMonth(d.getMonth() - 1);
   }
   return out;

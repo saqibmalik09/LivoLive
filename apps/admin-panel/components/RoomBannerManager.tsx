@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -139,7 +140,7 @@ export function RoomBannerManager({ initialRooms }: { initialRooms: AdminRoomRow
               >
                 <div className="w-14 h-14 rounded-xl overflow-hidden bg-black/40 border border-white/10 shrink-0">
                   {room.imageUrl ? (
-                    <img src={room.imageUrl} alt="" className="w-full h-full object-cover" />
+                    <CdnImg src={room.imageUrl} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-white/20">
                       <Home size={20} />
@@ -225,7 +226,7 @@ export function RoomBannerManager({ initialRooms }: { initialRooms: AdminRoomRow
               </p>
               <div className="aspect-[16/9] max-w-md rounded-2xl overflow-hidden bg-black/40 border border-white/10">
                 {bannerUrl ? (
-                  <img
+                  <CdnImg
                     src={bannerUrl}
                     alt="Room banner preview"
                     className="w-full h-full object-cover"

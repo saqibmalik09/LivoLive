@@ -17,6 +17,46 @@ type SvgaPlayerLike = {
   _onResize?: () => void;
 };
 
+/** If CDN fetch fails (CORS / missing object), try Supabase public origin. */
+function originFallbackUrl(src: string): string | null {
+  try {
+    const uri = new URL(src);
+    const host = uri.hostname.toLowerCase();
+    if (
+      host !== "cdn.skliveparty.online" &&
+      !host.endsWith(".r2.dev")
+    ) {
+      return null;
+    }
+    const path = uri.pathname.replace(/^\//, "");
+    if (!path || path.startsWith("cdn-cgi/")) return null;
+    // shop_assets are bare keys on CDN; other buckets keep bucket/ prefix.
+    const looksBucketPrefixed =
+      path.startsWith("app_assets/") ||
+      path.startsWith("vip_assets/") ||
+      path.startsWith("profiles/") ||
+      path.startsWith("chat_assets/") ||
+      path.startsWith("posts_assets/") ||
+      path.startsWith("family-logos/") ||
+      path.startsWith("room_backgrounds/") ||
+      path.startsWith("cp_nest_assets/") ||
+      path.startsWith("game-icons/") ||
+      path.startsWith("support_attachments/");
+    const objectPath = looksBucketPrefixed ? path : `shop_assets/${path}`;
+    return `https://api.skliveparty.online/storage/v1/object/public/${objectPath}`;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSvgaBlob(url: string): Promise<Blob> {
+  const response = await fetch(url, { mode: "cors", credentials: "omit" });
+  if (!response.ok) {
+    throw new Error(`Could not load SVGA (HTTP ${response.status})`);
+  }
+  return response.blob();
+}
+
 async function resolveSvgaLoadUrl(src: string): Promise<{
   url: string;
   revoke: boolean;
@@ -24,12 +64,15 @@ async function resolveSvgaLoadUrl(src: string): Promise<{
   if (src.startsWith("blob:")) {
     return { url: src, revoke: false };
   }
-  const response = await fetch(src);
-  if (!response.ok) {
-    throw new Error(`Could not load SVGA (HTTP ${response.status})`);
+  try {
+    const blob = await fetchSvgaBlob(src);
+    return { url: URL.createObjectURL(blob), revoke: true };
+  } catch (primaryErr) {
+    const fallback = originFallbackUrl(src);
+    if (!fallback || fallback === src) throw primaryErr;
+    const blob = await fetchSvgaBlob(fallback);
+    return { url: URL.createObjectURL(blob), revoke: true };
   }
-  const blob = await response.blob();
-  return { url: URL.createObjectURL(blob), revoke: true };
 }
 
 function waitForBox(el: HTMLElement, tries = 20): Promise<boolean> {

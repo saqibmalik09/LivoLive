@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -242,7 +243,7 @@ export function HomeBannersManager({
                 className={`${sizeSpec.aspectClass} rounded-2xl overflow-hidden bg-black/40 border border-white/10 flex items-center justify-center`}
               >
                 {editing.image_url ? (
-                  <img
+                  <CdnImg
                     src={editing.image_url}
                     alt="Banner preview"
                     className="w-full h-full object-contain"
@@ -399,7 +400,7 @@ export function HomeBannersManager({
         {items.map((banner) => (
           <div key={banner.id} className="glass-card border border-white/10 overflow-hidden">
             <div className={`${sizeSpec.aspectClass} bg-black/40`}>
-              <img
+              <CdnImg
                 src={banner.image_url}
                 alt={`Banner priority ${banner.priority}`}
                 className="w-full h-full object-contain"

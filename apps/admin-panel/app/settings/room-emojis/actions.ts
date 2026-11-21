@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import {
   isSvgaRankingAsset,
   resolveRankingAssetContentType,
@@ -96,15 +97,12 @@ export async function uploadRoomMicEmojiAsset(formData: FormData) {
     const contentType = resolveRankingAssetContentType(fileEntry, originalName);
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     const fileName = `room-emojis/${Date.now()}-${originalName.replace(/\s+/g, "_").replace(/\.[^.]+$/, "")}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("app_assets");
-    let uploadError = (await bucket.upload(fileName, buffer, { contentType, upsert: true })).error;
-    if (uploadError && isSvga) {
-      uploadError = (await bucket.upload(fileName, buffer, { upsert: true })).error;
-    }
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = bucket.getPublicUrl(fileName);
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType,
+    });
     return { success: true as const, url: publicUrl };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

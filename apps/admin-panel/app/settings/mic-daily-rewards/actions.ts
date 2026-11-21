@@ -1,5 +1,6 @@
 "use server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { uploadPublicBucketToR2 } from "@/lib/r2";
 import {
   resolveRankingAssetContentType,
   resolveRankingAssetExtension,
@@ -178,15 +179,12 @@ export async function uploadMicDailyRewardImage(formData: FormData) {
     const fileName = `mic-daily-rewards/${Date.now()}-${originalName
       .replace(/\s+/g, "_")
       .replace(/\.[^.]+$/, "")}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("app_assets");
-    const { error: uploadError } = await bucket.upload(fileName, buffer, {
-      contentType,
-      upsert: true,
+    const { publicUrl } = await uploadPublicBucketToR2({
+      bucket: "app_assets",
+      objectPath: fileName,
+      body: buffer,
+      contentType: contentType,
     });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = bucket.getPublicUrl(fileName);
     return { success: true as const, url: publicUrl };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

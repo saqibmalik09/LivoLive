@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -67,7 +68,7 @@ export function RankingPodiumForm({ config }: { config: Config }) {
               </button>
             </div>
             {url ? (
-              <img src={url} alt="" className="w-full max-h-36 rounded-xl object-cover" />
+              <CdnImg src={url} alt="" className="w-full max-h-36 rounded-xl object-cover" />
             ) : (
               <p className="text-white/30 text-sm">No image — app uses bundled fallback</p>
             )}

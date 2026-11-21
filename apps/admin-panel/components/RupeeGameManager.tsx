@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useMemo, useState } from "react";
 import {
   drawRupeeGameWinner,
@@ -322,7 +323,7 @@ export function RupeeGameManager({
                   <span className="text-white/50">Hero image</span>
                   <div className="flex items-center gap-2">
                     {editCampaign.hero_image_url ? (
-                      <img src={editCampaign.hero_image_url} alt="" className="h-12 rounded" />
+                      <CdnImg src={editCampaign.hero_image_url} alt="" className="h-12 rounded" />
                     ) : null}
                     <label className="cursor-pointer rounded-lg bg-white/10 p-2">
                       {uploading ? (
@@ -465,7 +466,7 @@ export function RupeeGameManager({
                   <span className="text-white/50">Image</span>
                   <div className="flex items-center gap-2">
                     {editPrize.image_url ? (
-                      <img src={editPrize.image_url} alt="" className="h-16 rounded" />
+                      <CdnImg src={editPrize.image_url} alt="" className="h-16 rounded" />
                     ) : null}
                     <label className="cursor-pointer rounded-lg bg-white/10 p-2">
                       {uploading ? (
@@ -510,7 +511,7 @@ export function RupeeGameManager({
                   <div className="flex justify-between gap-4">
                     <div className="flex gap-3">
                       {p.image_url ? (
-                        <img
+                        <CdnImg
                           src={p.image_url}
                           alt=""
                           className="h-16 w-16 object-contain rounded"

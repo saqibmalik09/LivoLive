@@ -4,6 +4,7 @@ import {
   resolveRankingAssetContentType,
   resolveRankingAssetExtension,
 } from "@/lib/ranking-asset-media";
+import { uploadShopAssetToR2 } from "@/lib/r2";
 import { revalidatePath } from "next/cache";
 export type DailySignInRewardRow = {
   day_number: number;
@@ -108,15 +109,11 @@ export async function uploadDailySignInImage(formData: FormData) {
     const fileName = `daily-signin/${Date.now()}-${originalName
       .replace(/\s+/g, "_")
       .replace(/\.[^.]+$/, "")}.${ext}`;
-    const bucket = supabaseAdmin.storage.from("shop_assets");
-    const { error: uploadError } = await bucket.upload(fileName, buffer, {
+    const { publicUrl } = await uploadShopAssetToR2({
+      key: fileName,
+      body: buffer,
       contentType,
-      upsert: true,
     });
-    if (uploadError) throw uploadError;
-    const {
-      data: { publicUrl },
-    } = bucket.getPublicUrl(fileName);
     return { success: true as const, url: publicUrl };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

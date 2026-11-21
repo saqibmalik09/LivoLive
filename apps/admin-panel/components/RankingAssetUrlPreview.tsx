@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { isSvgaAssetUrl } from "@/lib/ranking-asset-media";
 import { SvgaPreview } from "@/components/SvgaPreview";
 function withCacheBust(url: string, cacheKey?: number) {
@@ -44,7 +45,7 @@ export function RankingAssetUrlPreview({
           </div>
         </>
       ) : (
-        <img src={withCacheBust(displaySrc, cacheKey)} alt="Frame preview" className={className} />
+        <CdnImg src={withCacheBust(displaySrc, cacheKey)} alt="Frame preview" className={className} />
       )}
       {savedUrl && !savedUrl.startsWith("blob:") && (
         <p className="text-[10px] text-emerald-400/90 break-all">Saved: {savedUrl}</p>

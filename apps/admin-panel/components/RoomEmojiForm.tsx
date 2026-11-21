@@ -1,4 +1,5 @@
 "use client";
+import { CdnImg } from "@/components/CdnImg";
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -87,7 +88,7 @@ export function RoomEmojiForm({ emoji }: RoomEmojiFormProps) {
         <div className="glass-card overflow-hidden p-0">
           <div className="aspect-square bg-black/60 flex items-center justify-center border-b border-white/5 relative">
             {imageUrl ? (
-              <img src={imageUrl} alt="Preview" className="w-4/5 h-4/5 object-contain" />
+              <CdnImg src={imageUrl} alt="Preview" className="w-4/5 h-4/5 object-contain" />
             ) : (
               <Smile size={64} className="text-amber-500/20" />
             )}

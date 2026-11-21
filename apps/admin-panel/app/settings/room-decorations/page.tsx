@@ -1,3 +1,4 @@
+import { CdnImg } from "@/components/CdnImg";
 import { supabaseAdmin } from "@/lib/supabase";
 import { CustomBackgroundPriceForm } from "@/components/CustomBackgroundPriceForm";
 import { ArrowLeft, Plus, Palette } from "lucide-react";
@@ -58,7 +59,7 @@ export default async function RoomDecorationsPage() {
           >
             <div className="aspect-[9/16] max-h-48 mx-auto bg-black/40 relative">
               {d.image_url ? (
-                <img
+                <CdnImg
                   src={d.image_url}
                   alt={d.name}
                   className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
