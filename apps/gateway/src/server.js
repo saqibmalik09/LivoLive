@@ -2523,14 +2523,12 @@ io.on("connection", (socket) => {
         await pubClient.del(`gift:send:done:${clientOpId}`);
         return ackErr(ack, "Gift not found or inactive");
       }
-      const cat = gift.category_name || "";
-      if (
-        !giftSettle.isLuckyCategory(cat) &&
-        !giftSettle.isLuckyProCategory(cat)
-      ) {
-        await pubClient.del(`gift:send:done:${clientOpId}`);
-        return ackErr(ack, "gift:send is only for lucky / lucky pro");
-      }
+      // Every category settles here, not just lucky. The old split sent normal
+      // gifts as a Supabase RPC from the phone followed by a second socket call
+      // to broadcast — two sequential round trips on the sender's connection
+      // while the whole room waited. One socket call settles next to Postgres
+      // and broadcasts before the ack. Lucky rolls stay safe: they are gated on
+      // the is_lucky metadata the SQL returns, not on reaching this handler.
       const settle = await giftSettle.settleGifts({
         senderId: socket.data.userId,
         receiverIds: targetIds,

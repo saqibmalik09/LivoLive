@@ -607,8 +607,12 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
       }
       final isLuckyGift = isLuckyCategoryName(selectedCategoryName);
       final isLuckyProGift = isLuckyProCategoryName(selectedCategoryName);
-      final useGatewaySettle =
-          AppConstants.useGatewayLuckyEngine && (isLuckyGift || isLuckyProGift);
+      // All categories settle on the gateway now, one socket call instead of a
+      // phone-side RPC plus a second broadcast call. sendRoomGiftsViaGateway
+      // falls back to the RPC path by itself when the socket is down or an
+      // older gateway rejects the category, so this is safe against mixed
+      // versions.
+      final useGatewaySettle = AppConstants.useGatewayLuckyEngine;
 
       if (onRepeatGiftReady != null && targets.isNotEmpty) {
         String targetUsername;
