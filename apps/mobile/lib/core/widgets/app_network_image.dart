@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/util/room_cover_cache.dart';
 
@@ -109,6 +110,7 @@ class AppNetworkImage extends StatelessWidget {
         errorBuilder: (context, error, stackTrace) {
           if (transformed != rewritten) {
             return CachedNetworkImage(
+              cacheManager: AppImageCache.manager,
               imageUrl: rewritten,
               fit: fit,
               width: width,
@@ -139,6 +141,7 @@ class AppNetworkImage extends StatelessWidget {
     if (transformed != rewritten) {
       final fallbackError = errorWidget;
       onError = (context, url, error) => CachedNetworkImage(
+        cacheManager: AppImageCache.manager,
         imageUrl: rewritten,
         fit: fit,
         width: width,
@@ -160,6 +163,7 @@ class AppNetworkImage extends StatelessWidget {
     }
 
     return CachedNetworkImage(
+      cacheManager: AppImageCache.manager,
       imageUrl: transformed,
       cacheKey: cacheKey,
       fit: fit,
@@ -207,6 +211,7 @@ ImageProvider<Object> _decodedProvider(
 }) {
   final ImageProvider<Object> provider = CachedNetworkImageProvider(
     url,
+    cacheManager: AppImageCache.manager,
     cacheKey: cacheKey,
     maxWidth: maxWidthDiskCache,
     maxHeight: maxHeightDiskCache,
@@ -273,6 +278,7 @@ CachedNetworkImageProvider AppNetworkImageProvider(
       imageUrl;
   return CachedNetworkImageProvider(
     url,
+    cacheManager: AppImageCache.manager,
     maxWidth: maxWidth,
     maxHeight: maxHeight,
   );

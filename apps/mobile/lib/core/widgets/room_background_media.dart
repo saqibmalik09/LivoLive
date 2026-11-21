@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 
@@ -76,6 +77,7 @@ class RoomBackgroundMedia extends StatelessWidget {
     final media = MediaUrlUtil.isSvgaUrl(url)
         ? RaveSVGAPlayer(resUrl: url, fit: fit, repeat: true)
         : CachedNetworkImage(
+            cacheManager: AppImageCache.manager,
             imageUrl: url,
             fit: fit,
             fadeInDuration: Duration.zero,

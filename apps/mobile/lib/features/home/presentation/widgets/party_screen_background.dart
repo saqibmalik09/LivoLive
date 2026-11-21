@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sk_live/core/providers/party_screen_config_provider.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
 
 class PartyScreenBackground extends ConsumerWidget {
   const PartyScreenBackground({super.key});
@@ -54,6 +55,7 @@ class _TopBandImage extends ConsumerWidget {
           blendMode: BlendMode.dstIn,
           child: config.topImageUrl.isNotEmpty
               ? CachedNetworkImage(
+                  cacheManager: AppImageCache.manager,
                   imageUrl: config.versionedTopUrl,
                   cacheKey: 'party_top_${config.cacheVersion}',
                   fit: BoxFit.cover,

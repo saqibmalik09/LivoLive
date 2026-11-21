@@ -543,6 +543,40 @@ async function refreshSeatsCache(roomId) {
     return state.getSeatsSnapshot(pubClient, roomId);
   }
 }
+// Fills the seat and meta caches for a room if they are cold, so the caller's
+// buildSnapshot is a pure Redis read. Never throws and never returns data: the
+// point is only to move the Postgres reads off the critical path. Concurrent
+// joins into the same room collapse onto one in-flight warm.
+const warmFlight = new Map();
+function warmRoomCaches(roomId) {
+  const inFlight = warmFlight.get(roomId);
+  if (inFlight) return inFlight;
+  const run = (async () => {
+    const [seats, meta] = await Promise.all([
+      state.getSeatsSnapshot(pubClient, roomId).catch(() => null),
+      state.getMetaSnapshot(pubClient, roomId).catch(() => null),
+    ]);
+    const work = [];
+    if (!Array.isArray(seats)) work.push(refreshSeatsCache(roomId));
+    if (!meta) {
+      work.push(
+        (async () => {
+          const loaded = await db.loadRoomMeta(roomId);
+          await state.setMetaSnapshot(pubClient, roomId, loaded);
+        })(),
+      );
+    }
+    if (work.length) await Promise.allSettled(work);
+  })()
+    .catch((err) => {
+      console.warn("[room:join] cache warm:", err.message);
+    })
+    .finally(() => {
+      warmFlight.delete(roomId);
+    });
+  warmFlight.set(roomId, run);
+  return run;
+}
 // Presence is pushed to Postgres so room discovery lists stay warm. Ten people
 // arriving at once used to mean ten of these round trips inside ten joins; one
 // per room per window reports the same number with one query.
@@ -1778,6 +1812,14 @@ io.on("connection", (socket) => {
       }
       user.id = socket.data.userId;
       emitCachedSeats(socket, roomId);
+      // Warm the seat and meta caches alongside the presence bookkeeping. On a
+      // cold Redis both of these read Postgres, and that read used to start
+      // only after three awaited presence writes had finished — which is where
+      // a first join into an idle room lost most of its seconds. buildSnapshot
+      // below still runs after presenceJoin so the snapshot's presence list
+      // includes the joiner; by then these reads have already landed in Redis,
+      // so it is a cache hit and the snapshot contents are unchanged.
+      const cachesWarm = warmRoomCaches(roomId);
       if (prevSocketRoom && prevSocketRoom !== roomId) {
         await vacateUserFromRoom(
           prevSocketRoom,
@@ -1796,6 +1838,7 @@ io.on("connection", (socket) => {
             ? ` (left ${prevSocketRoom})`
             : ""),
       );
+      await cachesWarm;
       const snapshot = await buildSnapshot(roomId);
       bumpSeatEmit(socket);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });

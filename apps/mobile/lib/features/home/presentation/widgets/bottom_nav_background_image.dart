@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/providers/party_screen_config_provider.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
 
 class BottomNavBackgroundImage extends StatelessWidget {
   const BottomNavBackgroundImage({super.key, required this.config});
@@ -15,6 +16,7 @@ class BottomNavBackgroundImage extends StatelessWidget {
   Widget _buildImage() {
     if (config.bottomImageUrl.isNotEmpty) {
       return CachedNetworkImage(
+        cacheManager: AppImageCache.manager,
         imageUrl: config.versionedBottomUrl,
         cacheKey: 'party_bottom_nav_${config.cacheVersion}',
         fit: BoxFit.cover,

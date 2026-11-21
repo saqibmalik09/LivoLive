@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/providers/home_hot_cards_config_provider.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
 import 'package:sk_live/core/widgets/svga_player_muted.dart';
 import 'package:video_player/video_player.dart';
 
@@ -104,6 +105,7 @@ class _HotCardMediaWidgetState extends State<HotCardMediaWidget> {
           return const SizedBox.shrink();
         case HotCardMediaType.image:
           return CachedNetworkImage(
+            cacheManager: AppImageCache.manager,
             imageUrl: remoteUrl,
             cacheKey: '${remoteUrl}_${widget.cacheVersion}',
             fit: BoxFit.cover,
