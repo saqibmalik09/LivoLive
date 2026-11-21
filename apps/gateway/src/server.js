@@ -646,6 +646,38 @@ async function voiceSessionFromSnapshot(snapshot, userId, user, roomId) {
     return null;
   }
 }
+// Early publish grant. Tapping a seat grants publish on the user's open LiveKit
+// connection before the seat is written, so by the time the claim is acked the
+// client can publish with no permission wait. The grant is only given for a seat
+// the user could actually take, and it is taken back if they never sit.
+const PREPARE_GRANT_TTL_MS = Number(process.env.SEAT_PREPARE_TTL_MS || 25000);
+const preparedGrants = new Map();
+function clearPreparedGrant(roomId, userId) {
+  const key = `${roomId}:${userId}`;
+  const timer = preparedGrants.get(key);
+  if (timer) clearTimeout(timer);
+  preparedGrants.delete(key);
+}
+// Takes publish away from a user who is no longer on a seat. Without this the
+// only way a client lost publish was reconnecting with a new token, which is a
+// multi-second stall on every seat leave.
+function revokeLivePublish(roomId, userId, reason) {
+  if (!roomId || !userId) return;
+  clearPreparedGrant(roomId, userId);
+  void orbitVoice
+    .syncLivePermission({ userId: userId, roomId: roomId, canPublish: false })
+    .then(
+      (result) => {
+        if (result !== "updated" && result !== "not_connected") {
+          console.warn(
+            `[voice] revoke publish room=${roomId} user=${userId} ` +
+              `reason=${reason} perm=${result}`,
+          );
+        }
+      },
+      (e) => console.warn("[voice] revoke publish threw:", e?.message || e),
+    );
+}
 /**
  * Writes a seat and fans the change out. Shared by seat:claim and seat:sit.
  *
@@ -731,6 +763,8 @@ async function handleSeatClaim(socket, payload, ack, { withVoice }) {
     };
     let voice = null;
     if (withVoice) {
+      // The seat now backs the grant, so the early-grant expiry is moot.
+      clearPreparedGrant(roomId, userId);
       voice = await orbitVoice
         .mintVoiceTokenFor({
           userId: userId,
@@ -1116,6 +1150,7 @@ async function vacateUserFromRoom(
     }
   }
   if (leftSeatIndex != null) {
+    revokeLivePublish(roomId, userId, `vacate_${reason}`);
     try {
       await refreshSeatsCache(roomId);
       await emitRoomEvent(
@@ -2005,6 +2040,50 @@ io.on("connection", (socket) => {
   socket.on("seat:sit", (payload = {}, ack) =>
     handleSeatClaim(socket, payload, ack, { withVoice: true }),
   );
+  socket.on("seat:prepare", async (payload = {}, ack) => {
+    try {
+      noteSocketActivity(socket, "seat:prepare");
+      const roomId = String(payload.roomId || "").trim();
+      const seatIndex = Number(payload.seatIndex);
+      if (!roomId || Number.isNaN(seatIndex)) {
+        return ackErr(ack, "roomId and seatIndex required");
+      }
+      const userId = socket.data.userId;
+      if (!userId || String(userId).startsWith("anon:")) {
+        return ackErr(ack, "unauthorized");
+      }
+      if (!socket.rooms.has(`room:${roomId}`)) {
+        return ackErr(ack, "not_in_room");
+      }
+      const seats = await state.getSeatsSnapshot(pubClient, roomId);
+      const seat = Array.isArray(seats)
+        ? seats.find((s) => seatOccupantIndex(s) === seatIndex)
+        : null;
+      if (seat?.is_locked) return ackErr(ack, "seat_locked");
+      const holder = seatOccupantId(seat);
+      if (holder && holder !== String(userId)) {
+        return ackErr(ack, "seat_unavailable");
+      }
+      const perm = await orbitVoice.syncLivePermission({
+        userId: userId,
+        roomId: roomId,
+        canPublish: true,
+      });
+      clearPreparedGrant(roomId, userId);
+      const timer = setTimeout(async () => {
+        preparedGrants.delete(`${roomId}:${userId}`);
+        const seated = await redisSeatIndexForUser(roomId, userId);
+        if (seated == null) revokeLivePublish(roomId, userId, "prepare_expired");
+      }, PREPARE_GRANT_TTL_MS);
+      if (typeof timer.unref === "function") timer.unref();
+      preparedGrants.set(`${roomId}:${userId}`, timer);
+      // revokes_on_leave tells the client this gateway takes publish back on
+      // seat leave, so it can stay connected instead of reconnecting.
+      ackOk(ack, { perm: perm, revokes_on_leave: true });
+    } catch (err) {
+      ackErr(ack, err.message);
+    }
+  });
   socket.on("seat:leave", async (payload = {}, ack) => {
     try {
       noteSocketActivity(socket, "seat:leave");
@@ -2031,6 +2110,7 @@ io.on("connection", (socket) => {
             ? leftSeatIndex
             : -1;
       await refreshSeatsCache(roomId);
+      revokeLivePublish(roomId, targetUserId, "seat_leave");
       const data = {
         event_id: eventId,
         room_id: roomId,
