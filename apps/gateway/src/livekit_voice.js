@@ -4,6 +4,9 @@ const db = require("./db");
 const TOKEN_TTL_SECONDS = 6 * 60 * 60;
 const ADMIN_TOKEN_TTL_SECONDS = 60;
 const PERMISSION_SYNC_TIMEOUT_MS = 2000;
+const PERMISSION_SYNC_FIRST_ATTEMPT_MS = Number(
+  process.env.LIVEKIT_PERM_SYNC_FIRST_ATTEMPT_MS || 600,
+);
 // How long a token mint is willing to wait for the admin-API permission sync
 // before replying anyway. The sync keeps running in the background; the caller
 // sees perm_sync = "pending" instead of a token that arrives seconds late.
@@ -85,9 +88,36 @@ async function signAdminToken({ apiKey, apiSecret, room }) {
  * Never throws: on any failure we return a reason and the caller proceeds, which
  * just restores the previous reconnect behaviour rather than breaking voice.
  */
-async function syncLivePermission({ url, apiKey, apiSecret, room, identity, canPublish }) {
+async function syncLivePermission(args) {
+  // Production showed a share of these calls hanging until the 2 s timeout
+  // (error_AbortError) while the rest returned in milliseconds — a hung
+  // connection, not a slow server. Cutting a stuck attempt early and retrying
+  // on a fresh request turns that 2 s stall into roughly the first-attempt
+  // budget. The update is idempotent, so a retry is always safe.
+  const startedAt = Date.now();
+  const first = await syncLivePermissionOnce(args, PERMISSION_SYNC_FIRST_ATTEMPT_MS);
+  if (!isTransientSyncFailure(first)) return first;
+  console.warn(
+    `[voice:livekit] perm attempt 1 ${first} after ${Date.now() - startedAt}ms ` +
+      `room=${args.room} can=${!!args.canPublish}, retrying`,
+  );
+  const remaining = Math.max(
+    PERMISSION_SYNC_TIMEOUT_MS - (Date.now() - startedAt),
+    PERMISSION_SYNC_FIRST_ATTEMPT_MS,
+  );
+  return await syncLivePermissionOnce(args, remaining);
+}
+
+function isTransientSyncFailure(result) {
+  return String(result).startsWith("error_") || /^failed_5/.test(String(result));
+}
+
+async function syncLivePermissionOnce(
+  { url, apiKey, apiSecret, room, identity, canPublish },
+  timeoutMs,
+) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PERMISSION_SYNC_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const token = await signAdminToken({ apiKey: apiKey, apiSecret: apiSecret, room: room });
     const res = await fetch(
