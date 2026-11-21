@@ -327,7 +327,100 @@ final publicUserProfileProvider = FutureProvider.autoDispose
       );
     });
 
+const Duration _profileBundleTimeout = Duration(seconds: 6);
+const Duration _vipFrameTimeout = Duration(seconds: 3);
+
+/// Opening a seat used to cost nine round trips: the user row, then six queries
+/// in parallel, then the CP badge and the VIP frame. On a slow phone connection
+/// that is where the twenty-to-forty second wait came from, because the sheet
+/// could not paint until the slowest of them answered.
+///
+/// `profile_card_bundle` answers all of it in one call. If it is unavailable —
+/// an older server, or a timeout — the original fan-out still runs, so the card
+/// fills in either way.
 Future<Map<String, dynamic>?> _loadPublicUserProfile(
+  Ref ref,
+  String userId,
+) async {
+  final bundled = await _loadProfileCardBundle(userId);
+  if (bundled != null) return bundled;
+  return _loadPublicUserProfileFanout(ref, userId);
+}
+
+Future<Map<String, dynamic>?> _loadProfileCardBundle(String userId) async {
+  Map<String, dynamic> card;
+  try {
+    final res = await supabase
+        .rpc(
+          'profile_card_bundle',
+          params: {
+            'p_user': userId,
+            'p_viewer': supabase.auth.currentUser?.id,
+          },
+        )
+        .timeout(_profileBundleTimeout);
+    if (res is! Map) return null;
+    card = Map<String, dynamic>.from(res);
+  } catch (e) {
+    debugPrint('[profile] bundle unavailable, falling back: $e');
+    return null;
+  }
+
+  final cpData = card['cp_data'];
+  if (cpData is Map) {
+    card['cp_data'] = {
+      ...Map<String, dynamic>.from(cpData),
+      'days': _daysSince(cpData['created_at']),
+    };
+  }
+
+  // The bundle lists owned frames; a VIP frame is granted by level rather than
+  // owned, so it is still read separately — but only for users who have one.
+  final vipLevel = (card['vip_level'] as num?)?.toInt() ?? 0;
+  if (vipLevel > 0) {
+    final vipFrame = await _fetchProfileVipFrame(
+      vipLevel,
+    ).timeout(_vipFrameTimeout, onTimeout: () => null);
+    if (vipFrame != null) {
+      card['frames'] = [
+        {
+          'id': vipFrame['id'],
+          'name': vipFrame['name'],
+          'image_url': vipFrame['image_url'],
+          'svga_url': vipFrame['svga_url'],
+          'is_vip': true,
+        },
+        ...?(card['frames'] as List?)?.cast<dynamic>(),
+      ];
+    }
+  }
+
+  card['frames'] = _takeMaps(card['frames'], 5);
+  card['cars'] = _takeMaps(card['cars'], 5);
+  card['gifts'] = _mapReceivedGiftsSummary(card['gifts']).take(10).toList();
+  card['total_sent'] = (card['total_sent'] as num?)?.toInt() ?? 0;
+  return card;
+}
+
+int _daysSince(dynamic rawTimestamp) {
+  final raw = rawTimestamp?.toString();
+  if (raw == null || raw.isEmpty) return 0;
+  final started = DateTime.tryParse(raw)?.toLocal();
+  if (started == null) return 0;
+  final days = DateTime.now().difference(started).inDays;
+  return days < 0 ? 0 : days;
+}
+
+List<Map<String, dynamic>> _takeMaps(dynamic rows, int limit) {
+  if (rows is! List) return const [];
+  return rows
+      .whereType<Map>()
+      .take(limit)
+      .map((row) => Map<String, dynamic>.from(row))
+      .toList();
+}
+
+Future<Map<String, dynamic>?> _loadPublicUserProfileFanout(
   Ref ref,
   String userId,
 ) async {

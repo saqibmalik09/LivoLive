@@ -292,6 +292,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   final Map<String, double> _soundLevels = {};
   final ValueNotifier<int> _soundLevelsVersion = ValueNotifier(0);
   bool _soundLevelsDisposed = false;
+  Timer? _soundLevelsCooldown;
+  bool _soundLevelsPending = false;
+  static const Duration _soundLevelsFlushInterval = Duration(milliseconds: 100);
+  // Resolved LiveKit identity -> seat user id, so a speaker report no longer
+  // scans every seat. Bounded so a long session cannot grow it.
+  final Map<String, String> _orbitIdentityUserIds = {};
+  static const int _orbitIdentityCacheMax = 64;
 
   final Map<String, bool> _speakSticky = {};
   final Map<String, Timer> _speakHoldTimers = {};
@@ -491,6 +498,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   bool get _hasCustomBackground {
     final url = _roomData?['background_url']?.toString().trim();
     return url != null && url.isNotEmpty;
+  }
+
+  /// The gateway and Supabase Realtime both report who is in the room, and both
+  /// used to drive entrances and rebuild this screen — so every join cost two
+  /// full rebuilds, and the Supabase handler's `_knownPresenceUserIds` reset
+  /// fought the gateway's incremental one, which is what double-fired entrance
+  /// animations when several people arrived at once.
+  ///
+  /// The gateway is authoritative: it carries the entrance payload and the car
+  /// SVGA. So Supabase presence is only read while the gateway is not carrying
+  /// this room. `track()` still runs either way, so app versions that read
+  /// Supabase presence keep seeing this user in their audience list.
+  bool get _gatewayOwnsPresence {
+    if (!AppConstants.useRealtimeGateway) return false;
+    final socket = RoomRealtimeSocket.instance;
+    return socket.isConnected &&
+        socket.isJoinedTo(widget.room['id'].toString());
   }
 
   List<Map<String, dynamic>> _dedupeOnlineUsersById(
@@ -1148,6 +1172,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
 
     _roomChannel.onPresenceSync((payload) {
+      if (_gatewayOwnsPresence) return;
       final states = _roomChannel.presenceState();
       final onlineUsers = <Map<String, dynamic>>[];
       final newPresenceIds = <String>{};
@@ -1259,6 +1284,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
         Future.delayed(const Duration(milliseconds: 500), () {
           if (!mounted || _isLeavingRoom) return;
+          if (_gatewayOwnsPresence) return;
           final states = _roomChannel.presenceState();
           final onlineUsers = <Map<String, dynamic>>[];
           for (final state in states) {
@@ -3739,20 +3765,62 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (userId == null || userId.isEmpty) return;
       if (_mergeSoundLevel(userId, level)) changed = true;
     });
-    if (changed && !_soundLevelsDisposed) _soundLevelsVersion.value++;
+    if (changed) _bumpSoundLevels();
+  }
+
+  /// LiveKit reports active speakers several times a second, and every seat
+  /// listens to this one notifier — so a ten-speaker room used to rebuild all
+  /// ten seats ten times a second. The first report lands immediately; the rest
+  /// are coalesced into one rebuild per window, and the timer stops as soon as
+  /// the reports do.
+  void _bumpSoundLevels() {
+    if (_soundLevelsDisposed) return;
+    if (_soundLevelsCooldown != null) {
+      _soundLevelsPending = true;
+      return;
+    }
+    _soundLevelsVersion.value++;
+    _startSoundLevelCooldown();
+  }
+
+  void _startSoundLevelCooldown() {
+    _soundLevelsCooldown = Timer(_soundLevelsFlushInterval, () {
+      _soundLevelsCooldown = null;
+      if (_soundLevelsDisposed || !_soundLevelsPending) return;
+      _soundLevelsPending = false;
+      _soundLevelsVersion.value++;
+      _startSoundLevelCooldown();
+    });
   }
 
   String? _userIdForOrbitIdentity(String identity) {
     final id = identity.trim();
     if (id.isEmpty) return null;
+    final cached = _orbitIdentityUserIds[id];
+    if (cached != null) return cached;
+
     final myId = Supabase.instance.client.auth.currentUser?.id;
-    if (myId != null && _orbitIdsMatch(id, myId)) return myId;
+    if (myId != null && _orbitIdsMatch(id, myId)) {
+      return _rememberOrbitIdentity(id, myId);
+    }
     for (final seat in _seats) {
       final seatUserId = seat['user_id']?.toString();
       if (seatUserId == null || seatUserId.isEmpty) continue;
-      if (_orbitIdsMatch(id, seatUserId)) return seatUserId;
+      if (_orbitIdsMatch(id, seatUserId)) {
+        return _rememberOrbitIdentity(id, seatUserId);
+      }
     }
+    // No seat claims this identity yet. Not cached: a seat may still appear,
+    // and caching the fallback would pin the wrong answer for the session.
     return id;
+  }
+
+  String _rememberOrbitIdentity(String identity, String userId) {
+    if (_orbitIdentityUserIds.length >= _orbitIdentityCacheMax) {
+      _orbitIdentityUserIds.remove(_orbitIdentityUserIds.keys.first);
+    }
+    _orbitIdentityUserIds[identity] = userId;
+    return userId;
   }
 
   bool _orbitIdsMatch(String identity, String userId) {
@@ -3867,7 +3935,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           final current = _soundLevels[userId] ?? 0;
           if (current < _speakOffThreshold) {
             _speakSticky[userId] = false;
-            if (!_soundLevelsDisposed) _soundLevelsVersion.value++;
+            _bumpSoundLevels();
           }
         });
       }
@@ -5715,6 +5783,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       _entranceTimer?.cancel();
       _activityTimer?.cancel();
       _seatsStreamSubscription?.cancel();
+      _soundLevelsCooldown?.cancel();
       if (!_soundLevelsDisposed) {
         _soundLevelsVersion.dispose();
         _soundLevelsDisposed = true;
@@ -5745,6 +5814,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _sharedAudioSeatPulseUserId = null;
     unawaited(_sharedAudioQueue.dispose());
     _sharedAudioSync.dispose();
+    _soundLevelsCooldown?.cancel();
     if (!_soundLevelsDisposed) {
       _soundLevelsVersion.dispose();
       _soundLevelsDisposed = true;
