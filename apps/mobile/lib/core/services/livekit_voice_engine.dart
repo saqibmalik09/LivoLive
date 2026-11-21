@@ -293,6 +293,15 @@ class LiveKitVoiceEngine implements VoiceEngine {
       return false;
     }
     try {
+      if (enabled && _sessionPublishing != true) {
+        // First publish on a connection that was opened as a listener: the
+        // seat grant arrived in place, so there was no reconnect to pick the
+        // call-mode session. Switch once here, then re-pin the speaker because
+        // Android hands routing back to the earpiece on a mode change. After
+        // this, mute and unmute leave the session alone (see below).
+        await _applyAudioSessionFor(publishing: true);
+        await _reassertSpeakerRoute();
+      }
       // Just the microphone. The audio session and the output route were both
       // settled at connect and are left alone: muting and unmuting used to
       // trigger a session switch plus four route re-asserts spread over 2.8

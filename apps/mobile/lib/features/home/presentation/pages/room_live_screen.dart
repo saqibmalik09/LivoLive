@@ -4602,29 +4602,54 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         );
         return;
       }
-      if (OrbitVoiceSessionService.isConnected &&
-          _orbitCanPublish &&
-          OrbitVoiceSessionService.canPublishNow) {
-        await _syncOrbitMicAndBilling(
-          roomId: roomId,
-          openMic: true,
-          onSeat: onSeat,
-        );
-
-        if (!OrbitVoiceSessionService.hasMicPublication &&
-            !OrbitVoiceSessionService.hasLiveMicTrack) {
-          debugPrint(
-            '[ORBIT] startSpeaking publish grant soft — forcing remint',
-          );
-          await _initOrbitVoice(openMic: true);
-        } else {
-          debugPrint(
-            '[ORBIT] startSpeaking mic on (no reconnect) '
-            'publishing=$_isLocalPublishing '
-            'pub=${OrbitVoiceSessionService.hasMicPublication}',
+      if (OrbitVoiceSessionService.isLiveForRoom(roomId)) {
+        // Already connected to this room, as a listener or a speaker. seat:sit
+        // grants publish on this live connection (UpdateParticipant) and that
+        // grant lands on the signalling socket at about the same time as the
+        // ack, so wait for it briefly and publish in place. Reconnecting to
+        // pick up the new token tore down both peer connections and made the
+        // server evict the old session first — several seconds before anyone
+        // could hear the new speaker. The reconnect remains the fallback.
+        final grantSw = Stopwatch()..start();
+        var granted = OrbitVoiceSessionService.canPublishNow;
+        if (!granted) {
+          granted = await OrbitVoiceSessionService.waitForPublishPermission(
+            timeout: const Duration(milliseconds: 1500),
           );
         }
-        return;
+        if (granted && !_isMuted && _mySeatIndex != null) {
+          _orbitCanPublish = true;
+          await _syncOrbitMicAndBilling(
+            roomId: roomId,
+            openMic: true,
+            onSeat: onSeat,
+          );
+
+          if (!OrbitVoiceSessionService.hasMicPublication &&
+              !OrbitVoiceSessionService.hasLiveMicTrack) {
+            debugPrint(
+              '[ORBIT] startSpeaking publish grant soft — forcing remint',
+            );
+            await _initOrbitVoice(openMic: true);
+          } else {
+            // The publish token from the sit ack is no longer needed; drop it
+            // so a later listener-only request cannot pick it up by mistake.
+            RoomRealtimeSocket.instance.takeVoiceSession(roomId);
+            debugPrint(
+              '[ORBIT] startSpeaking mic on in place '
+              'grant=${grantSw.elapsedMilliseconds}ms '
+              'publishing=$_isLocalPublishing '
+              'pub=${OrbitVoiceSessionService.hasMicPublication}',
+            );
+          }
+          return;
+        }
+        if (!granted) {
+          debugPrint(
+            '[ORBIT] startSpeaking no live publish grant after '
+            '${grantSw.elapsedMilliseconds}ms — reconnecting with sit token',
+          );
+        }
       }
       await _initOrbitVoice(openMic: true);
       return;
