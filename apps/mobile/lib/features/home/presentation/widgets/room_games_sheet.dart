@@ -345,8 +345,11 @@ class _GameTile extends StatelessWidget {
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
-
-        enableTransform: false,
+        // The tile is roughly 70dp. Downloading and decoding the uploaded
+        // icon at source resolution for every tile is what made opening the
+        // sheet expensive; 240px covers the largest phone at 3x.
+        transformWidth: 240,
+        memCacheWidth: 240,
         placeholder: (context, url) => const Center(
           child: SizedBox(
             width: 22,

@@ -74,11 +74,19 @@ class RoomBackgroundMedia extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final decodePx = _backgroundCachePx(context);
+    // The room background was the one image in the app loaded at its source
+    // resolution: a host can upload a 6000px photo, and the full multi-MB file
+    // was downloaded on every room entry. memCacheWidth below only bounds the
+    // decode, not the transfer. Asking Supabase to render it at the width we
+    // are about to decode to turns that into a webp of a few hundred KB.
+    final imageUrl =
+        SupabaseImageTransform.url(url, width: decodePx, quality: 80) ?? url;
     final media = MediaUrlUtil.isSvgaUrl(url)
         ? RaveSVGAPlayer(resUrl: url, fit: fit, repeat: true)
         : CachedNetworkImage(
             cacheManager: AppImageCache.manager,
-            imageUrl: url,
+            imageUrl: imageUrl,
             fit: fit,
             fadeInDuration: Duration.zero,
             // Default fade-out is 1s and sits on top of the image.
@@ -88,7 +96,7 @@ class RoomBackgroundMedia extends StatelessWidget {
             // device size instead of the source image's full resolution —
             // this still background is the first thing painted on room
             // entry, before any seat/frame content arrives.
-            memCacheWidth: _backgroundCachePx(context),
+            memCacheWidth: decodePx,
           );
 
     return Stack(
