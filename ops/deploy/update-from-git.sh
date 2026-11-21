@@ -44,11 +44,24 @@ DEST="/opt/sklive-${SERVICE}"
 [[ -d "$CLONE" ]] || { echo "missing clone at $CLONE" >&2; exit 1; }
 [[ -d "$DEST" ]]  || { echo "missing live folder $DEST" >&2; exit 1; }
 
+# A dirty clone makes `git pull` refuse, and because this script stops on the
+# first failure that used to look like a deploy that had happened when nothing
+# had been copied at all. Fail loudly instead, and say how to clear it.
+if ! git -C "$CLONE" diff --quiet || ! git -C "$CLONE" diff --cached --quiet; then
+  echo "!! $CLONE has local modifications, so the pull would be refused." >&2
+  git -C "$CLONE" status --short >&2
+  echo >&2
+  echo "   Nothing has been deployed. Discard them and re-run:" >&2
+  echo "     git -C $CLONE checkout -- ." >&2
+  exit 1
+fi
+
 echo "==> fetching $BRANCH"
 git -C "$CLONE" fetch --prune origin
 git -C "$CLONE" checkout "$BRANCH"
 git -C "$CLONE" pull --ff-only origin "$BRANCH"
-echo "==> clone now at $(git -C "$CLONE" rev-parse --short HEAD) on $BRANCH"
+HEAD_SHA=$(git -C "$CLONE" rev-parse --short HEAD)
+echo "==> clone now at $HEAD_SHA on $BRANCH"
 
 [[ -d "$CLONE/$SRC" ]] || { echo "missing $CLONE/$SRC" >&2; exit 1; }
 
@@ -73,4 +86,20 @@ rsync -a --delete \
   --exclude='._*' \
   "$CLONE/$SRC/" "$DEST/"
 
-exec "$(dirname "$0")/deploy-service.sh" "$SERVICE"
+"$(dirname "$0")/deploy-service.sh" "$SERVICE"
+
+# Prove the new code is actually inside the running container. A successful
+# build that was never picked up looks identical to a real deploy otherwise.
+if [[ "$SERVICE" == "gateway" ]]; then
+  echo "==> verifying new gateway code is live"
+  if docker exec "sklive-gateway" \
+       grep -q 'PERMISSION_SYNC_WAIT_MS' /app/src/livekit_voice.js 2>/dev/null; then
+    echo "==> OK: non-blocking voice mint is in the running container"
+  else
+    echo "!! the running container does NOT contain the expected change." >&2
+    echo "   Check the build output above; the old image may still be in use." >&2
+    exit 1
+  fi
+fi
+
+echo "==> deployed $SERVICE from $BRANCH @ ${HEAD_SHA}"
