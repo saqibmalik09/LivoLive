@@ -488,14 +488,90 @@ function extractLuckyWinFromGiftMessage(message, actorUserId, roomId) {
     created_at: message.created_at || new Date().toISOString(),
   };
 }
+/**
+ * Collapses concurrent identical async work onto one promise.
+ *
+ * Opening a room fires several snapshot reads at once (the join ack, the seat
+ * repaint, a late presence update). Each one used to run the whole Redis and
+ * SQL fan-out again, so a five-person room did five times the work it needed.
+ */
+function createSingleflight() {
+  const inFlight = new Map();
+  return function run(key, fn) {
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    const promise = Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        inFlight.delete(key);
+      });
+    inFlight.set(key, promise);
+    return promise;
+  };
+}
+const snapshotFlight = createSingleflight();
+// Resolves seat wear (frame + badges) for a set of users, preferring Redis.
+// Only users nobody has rendered recently reach the inventory/level/agency SQL.
+async function resolveSeatWear(userIds) {
+  let wear;
+  try {
+    wear = await state.mgetSeatWear(pubClient, userIds);
+  } catch (err) {
+    console.warn("[seats] wear cache read:", err.message);
+    wear = new Map();
+  }
+  const missing = userIds.filter((id) => !wear.has(id));
+  if (!missing.length) return wear;
+  const fresh = await db.loadSeatWearForUsers(missing);
+  fresh.forEach((value, id) => wear.set(id, value));
+  if (fresh.size) {
+    state
+      .msetSeatWear(pubClient, fresh)
+      .catch((err) => console.warn("[seats] wear cache write:", err.message));
+  }
+  return wear;
+}
 async function refreshSeatsCache(roomId) {
   try {
-    const seats = await db.loadRoomSeats(roomId);
+    const seats = await db.loadRoomSeats(roomId, {
+      wearResolver: resolveSeatWear,
+    });
     await state.setSeatsSnapshot(pubClient, roomId, seats);
     return seats;
   } catch (err) {
     console.warn("[seats] refresh failed:", err.message);
     return state.getSeatsSnapshot(pubClient, roomId);
+  }
+}
+// Presence is pushed to Postgres so room discovery lists stay warm. Ten people
+// arriving at once used to mean ten of these round trips inside ten joins; one
+// per room per window reports the same number with one query.
+const PRESENCE_REPORT_MS = Number(process.env.PRESENCE_REPORT_MS || 3000);
+const presenceReportTimers = new Map();
+function scheduleReportPresence(roomId) {
+  if (!roomId || presenceReportTimers.has(roomId)) return;
+  const timer = setTimeout(async () => {
+    presenceReportTimers.delete(roomId);
+    try {
+      const count = await state.presenceCount(pubClient, roomId);
+      await db.reportPresence(roomId, count);
+    } catch (err) {
+      console.warn("[presence] report failed:", err.message);
+    }
+  }, PRESENCE_REPORT_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  presenceReportTimers.set(roomId, timer);
+}
+// Records the joiner as a room member. The host already has a role, so they are
+// skipped. Meta comes from the snapshot cache the join just populated.
+async function persistRoomMembership(roomId, userId) {
+  try {
+    let meta = await state.getMetaSnapshot(pubClient, roomId);
+    if (!meta) meta = await db.loadRoomMeta(roomId);
+    if (meta && String(meta.host_id || "") === String(userId)) return;
+    await db.upsertMember({ roomId: roomId, userId: userId });
+  } catch (err) {
+    console.warn("[presence] join persist:", err.message);
   }
 }
 function seatOccupantId(seat) {
@@ -533,7 +609,10 @@ function emitCachedSeats(socket, roomId) {
   void (async () => {
     try {
       const seats = await state.getSeatsSnapshot(pubClient, roomId);
-      if (!Array.isArray(seats) || seats.length === 0) return;
+      // A cache miss returns null; an empty array is a real answer ("nobody is
+      // seated") and is worth sending, so the seats render immediately instead
+      // of waiting for the full snapshot.
+      if (!Array.isArray(seats)) return;
       if (!socket.connected || socket.data.seatEmitGen !== gen) return;
       socket.emit("room:snapshot", { room_id: roomId, seats: seats });
     } catch (err) {
@@ -541,7 +620,10 @@ function emitCachedSeats(socket, roomId) {
     }
   })();
 }
-async function buildSnapshot(roomId) {
+function buildSnapshot(roomId) {
+  return snapshotFlight(`snapshot:${roomId}`, () => loadSnapshot(roomId));
+}
+async function loadSnapshot(roomId) {
   const [
     cachedSeats,
     cachedMeta,
@@ -838,7 +920,7 @@ async function vacateUserFromRoom(
     try {
       await state.presenceLeave(pubClient, roomId, userId);
       const count = await state.presenceCount(pubClient, roomId);
-      await db.reportPresence(roomId, count);
+      scheduleReportPresence(roomId);
       if (count === 0) {
         await state.clearSeatGiftTotals(pubClient, roomId);
         await state.clearMediaStates(pubClient, roomId);
@@ -959,8 +1041,7 @@ async function ensureSingleRoomPresence(userId, roomId, userPayload = {}) {
           userId,
         );
         await state.presenceLeave(pubClient, otherRoom, userId);
-        const count = await state.presenceCount(pubClient, otherRoom);
-        await db.reportPresence(otherRoom, count);
+        scheduleReportPresence(otherRoom);
         await emitRoomEvent(
           otherRoom,
           "room_presence",
@@ -1012,11 +1093,17 @@ function cancelGraceVacate(userId) {
   pendingGraceVacates.delete(userId);
   return pending;
 }
+// Every socket joins a room named after its user, so "is this user connected"
+// is a targeted adapter lookup. These two used to pull down *every* connected
+// socket and scan it, which the presence sweep did once per stale member.
+function userSocketRoom(userId) {
+  return `user:${userId}`;
+}
 async function userHasLiveSocket(userId) {
   if (!userId) return false;
   try {
-    const sockets = await io.fetchSockets();
-    return sockets.some((s) => String(s.data.userId) === String(userId));
+    const sockets = await io.in(userSocketRoom(userId)).fetchSockets();
+    return sockets.length > 0;
   } catch (_) {
     return false;
   }
@@ -1024,10 +1111,12 @@ async function userHasLiveSocket(userId) {
 async function getLiveSocketRoomId(userId) {
   if (!userId) return null;
   try {
-    const sockets = await io.fetchSockets();
-    const mine = sockets.find((s) => String(s.data.userId) === String(userId));
-    const roomId = mine?.data?.roomId;
-    return roomId ? String(roomId) : null;
+    const sockets = await io.in(userSocketRoom(userId)).fetchSockets();
+    for (const s of sockets) {
+      const roomId = s?.data?.roomId;
+      if (roomId) return String(roomId);
+    }
+    return null;
   } catch (_) {
     return null;
   }
@@ -1325,8 +1414,11 @@ io.on("connection", (socket) => {
   ensureSocketDiag(socket);
   noteSocketActivity(socket, "connect");
   const dmUserId = socket.data.userId;
+  // Anonymous sockets join this room too, so userHasLiveSocket can answer for
+  // them without scanning every socket. DM delivery still only targets real
+  // user ids, so nothing is routed to an anon room.
+  if (dmUserId) socket.join(userSocketRoom(dmUserId));
   if (dmUserId && !String(dmUserId).startsWith("anon:")) {
-    socket.join(`user:${dmUserId}`);
     socket.data.watching = new Set();
     console.log(`[dm] joined user room user=${dmUserId}`);
     markAppOnline(dmUserId).catch((e) =>
@@ -1487,7 +1579,16 @@ io.on("connection", (socket) => {
         console.warn(
           `[presence] remapping ${socket.data.userId} -> ${claimedId}`,
         );
+        // Move the socket's user room with it, otherwise userHasLiveSocket
+        // would stop seeing this connection under its real id.
+        const prevUserRoom = userSocketRoom(socket.data.userId);
         socket.data.userId = claimedId;
+        try {
+          await socket.leave(prevUserRoom);
+          await socket.join(userSocketRoom(claimedId));
+        } catch (err) {
+          console.warn("[presence] remap user room:", err.message);
+        }
       }
       user.id = socket.data.userId;
       emitCachedSeats(socket, roomId);
@@ -1509,21 +1610,6 @@ io.on("connection", (socket) => {
             ? ` (left ${prevSocketRoom})`
             : ""),
       );
-      if (!String(socket.data.userId).startsWith("anon:")) {
-        try {
-          const meta = await db.loadRoomMeta(roomId);
-          if (meta?.host_id !== socket.data.userId) {
-            await db.upsertMember({
-              roomId: roomId,
-              userId: socket.data.userId,
-            });
-          }
-          const count = await state.presenceCount(pubClient, roomId);
-          await db.reportPresence(roomId, count);
-        } catch (err) {
-          console.warn("[presence] join persist:", err.message);
-        }
-      }
       const snapshot = await buildSnapshot(roomId);
       bumpSeatEmit(socket);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
@@ -1545,6 +1631,14 @@ io.on("connection", (socket) => {
         socket.data.userId,
       );
       ackOk(ack, { room: `room:${roomId}`, seq: snapshot.seq });
+      // Durable membership bookkeeping runs after the joiner already has their
+      // snapshot. It used to sit in front of the snapshot, so every join waited
+      // on a room read, a member upsert and a presence RPC before one seat
+      // appeared on screen.
+      if (!String(socket.data.userId).startsWith("anon:")) {
+        void persistRoomMembership(roomId, socket.data.userId);
+      }
+      scheduleReportPresence(roomId);
     } catch (err) {
       console.error("[room:join]", err.message);
       ackErr(ack, err.message);

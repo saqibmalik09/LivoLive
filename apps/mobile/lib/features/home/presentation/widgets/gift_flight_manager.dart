@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -67,8 +68,27 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   static const double _iconHalf = _iconSize / 2;
   static int _chainSeq = 0;
 
+  /// How many waves of a single combo are animated.
+  ///
+  /// A quantity of 66 used to animate 66 waves, and a wave only started once
+  /// every icon in the previous one had landed. At roughly half a second each
+  /// that is half a minute of icons trickling in while the banner already said
+  /// 66 — and with several senders at once the drip never caught up. The
+  /// quantity is carried by the gift banner; the flights only need to read as
+  /// a burst, so they are capped and overlapped.
+  static const int _maxAnimatedWaves = 12;
+
+  /// Gap between waves of the same combo. Waves overlap rather than queue, so
+  /// any quantity lands inside about a second and a half.
+  static const int _waveStaggerMs = 90;
+
+  /// Ceiling on icons in flight from everybody at once. Past this the frame
+  /// cost shows up on a cheap phone, and nobody can tell sixty icons from two
+  /// hundred.
+  static const int _maxActiveFlights = 60;
+
   final Map<String, List<_RunnableBatch>> _chainQueues = {};
-  final Map<String, int> _chainWaveRemaining = {};
+  final Map<String, Timer> _chainTimers = {};
   final List<_ActiveSingle> _activeSingles = [];
   final Set<String> _playedDedupeKeys = {};
   final Map<String, ImageProvider> _imageCache = {};
@@ -85,12 +105,15 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   @override
   void dispose() {
     widget.controller._detach(this);
+    for (final timer in _chainTimers.values) {
+      timer.cancel();
+    }
+    _chainTimers.clear();
     for (final f in _activeSingles) {
       f.controller.dispose();
     }
     _activeSingles.clear();
     _chainQueues.clear();
-    _chainWaveRemaining.clear();
     super.dispose();
   }
 
@@ -105,13 +128,16 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   }
 
   void clearAll() {
+    for (final timer in _chainTimers.values) {
+      timer.cancel();
+    }
+    _chainTimers.clear();
     for (final flight in _activeSingles) {
       flight.controller.stop();
       flight.controller.dispose();
     }
     _activeSingles.clear();
     _chainQueues.clear();
-    _chainWaveRemaining.clear();
     _scheduleRebuild();
   }
 
@@ -145,9 +171,10 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       final start = request.resolveOffset(request.senderId);
       final qty = request.quantity.clamp(1, 9999);
       final durationMs = _waveFlightMs(qty);
+      final waveCount = qty < _maxAnimatedWaves ? qty : _maxAnimatedWaves;
 
       final waves = <_RunnableBatch>[];
-      for (var wave = 0; wave < qty; wave++) {
+      for (var wave = 0; wave < waveCount; wave++) {
         final batch = _RunnableBatch(chainId: chainId, items: []);
         for (final targetId in request.targetIds) {
           final end = request.resolveOffset(targetId);
@@ -167,7 +194,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
 
       if (waves.isEmpty) return;
       _chainQueues.putIfAbsent(chainId, () => []).addAll(waves);
-      _tryStartNextWave(chainId);
+      _pumpChain(chainId);
     });
   }
 
@@ -182,41 +209,44 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     return (280 / (1 + logBoost * 0.25)).round().clamp(240, 300);
   }
 
-  void _tryStartNextWave(String chainId) {
-    if ((_chainWaveRemaining[chainId] ?? 0) > 0) return;
+  /// Launches one wave of a combo and schedules the next on a fixed gap.
+  ///
+  /// Waves used to be gated on the previous wave landing, which turned a large
+  /// combo into a slow trickle. They now overlap, so the whole combo is a short
+  /// burst no matter how big the quantity is.
+  void _pumpChain(String chainId) {
+    _chainTimers.remove(chainId)?.cancel();
 
     final queue = _chainQueues[chainId];
     if (queue == null || queue.isEmpty) {
       _chainQueues.remove(chainId);
-      _chainWaveRemaining.remove(chainId);
+      return;
+    }
+
+    // When the screen is already full of icons, drop the rest of this combo
+    // rather than queue work that would only arrive late and cost frames.
+    if (_activeSingles.length >= _maxActiveFlights) {
+      _chainQueues.remove(chainId);
       return;
     }
 
     final batch = queue.removeAt(0);
-    if (queue.isEmpty) {
-      _chainQueues.remove(chainId);
-    }
-
-    if (batch.items.isEmpty) {
-      _tryStartNextWave(chainId);
-      return;
-    }
-
-    _chainWaveRemaining[chainId] = batch.items.length;
     for (final pending in batch.items) {
       _startSingle(pending, chainId);
     }
-    _scheduleRebuild();
-  }
 
-  void _onWaveItemDone(String chainId) {
-    final left = (_chainWaveRemaining[chainId] ?? 1) - 1;
-    if (left <= 0) {
-      _chainWaveRemaining.remove(chainId);
-      _tryStartNextWave(chainId);
+    if (queue.isEmpty) {
+      _chainQueues.remove(chainId);
     } else {
-      _chainWaveRemaining[chainId] = left;
+      _chainTimers[chainId] = Timer(
+        const Duration(milliseconds: _waveStaggerMs),
+        () {
+          if (!mounted) return;
+          _pumpChain(chainId);
+        },
+      );
     }
+    if (batch.items.isNotEmpty) _scheduleRebuild();
   }
 
   void _startSingle(_SinglePending pending, String chainId) {
@@ -238,7 +268,6 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       }
       _activeSingles.remove(flight);
       controller.dispose();
-      _onWaveItemDone(chainId);
       _scheduleRebuild();
     });
   }

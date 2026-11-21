@@ -8,6 +8,12 @@ function presenceKey(roomId) {
 function presenceUserKey(roomId, userId) {
   return `room:${roomId}:presence:${userId}`;
 }
+function presenceListKey(roomId) {
+  return `room:${roomId}:presence_list`;
+}
+function seatWearKey(userId) {
+  return `wear:user:${userId}`;
+}
 function userPresenceRoomKey(userId) {
   return `presence:user:${userId}`;
 }
@@ -28,6 +34,15 @@ function sharedAudioStateKey(roomId) {
 }
 const SEAT_GIFTS_TTL_SEC = Number(process.env.SEAT_GIFTS_TTL_SEC || 86400);
 const MEDIA_STATE_TTL_SEC = Number(process.env.MEDIA_STATE_TTL_SEC || 3600);
+// Presence list cache. Reading presence used to cost 1 SMEMBERS + 1 GET per
+// member, so a snapshot in a busy room ran N+1 Redis commands and every join
+// paid it again. The rebuilt list is cached for a few seconds and dropped on
+// join/leave, so repeat reads are a single GET and staleness stays bounded by
+// the per-user TTL the sweep already relies on.
+const PRESENCE_LIST_TTL_SEC = Number(process.env.PRESENCE_LIST_TTL_SEC || 15);
+// Short enough that buying a frame shows up on your seat without a restart,
+// long enough that a busy room resolves wear from Redis instead of SQL.
+const SEAT_WEAR_TTL_SEC = Number(process.env.SEAT_WEAR_TTL_SEC || 120);
 async function _setJson(redis, key, value, ttlSec) {
   if (!key || value == null) return;
   await redis.set(key, JSON.stringify(value), "EX", ttlSec);
@@ -166,6 +181,8 @@ async function presenceJoin(
     ttl,
   );
   pipe.set(userPresenceRoomKey(userId), roomId, "EX", ttl);
+  pipe.del(presenceListKey(roomId));
+  if (prev && prev !== roomId) pipe.del(presenceListKey(prev));
   await pipe.exec();
 }
 async function presenceLeave(redis, roomId, userId) {
@@ -176,6 +193,7 @@ async function presenceLeave(redis, roomId, userId) {
   if (tracked === roomId) {
     pipe.del(userPresenceRoomKey(userId));
   }
+  pipe.del(presenceListKey(roomId));
   await pipe.exec();
 }
 async function getUserPresenceRoom(redis, userId) {
@@ -186,6 +204,25 @@ async function presenceHeartbeat(redis, roomId, userId, userPayload, ttlSec) {
   await presenceJoin(redis, roomId, userId, userPayload, ttlSec);
 }
 async function listPresence(redis, roomId) {
+  const cached = await redis.get(presenceListKey(roomId));
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // fall through and rebuild
+    }
+  }
+  const users = await rebuildPresenceList(redis, roomId);
+  await redis.set(
+    presenceListKey(roomId),
+    JSON.stringify(users),
+    "EX",
+    PRESENCE_LIST_TTL_SEC,
+  );
+  return users;
+}
+async function rebuildPresenceList(redis, roomId) {
   const ids = await redis.smembers(presenceKey(roomId));
   if (!ids.length) return [];
   const pipe = redis.pipeline();
@@ -217,6 +254,44 @@ async function listPresence(redis, roomId) {
 }
 async function presenceCount(redis, roomId) {
   return redis.scard(presenceKey(roomId));
+}
+// Seat wear (frame + badges) per user. The SQL behind it joins inventory,
+// level assets, couples and agency rankings, so it is the expensive part of a
+// seat snapshot. Cached per user rather than per room: the same person is on a
+// seat across rejoins and in several rooms over a session.
+async function mgetSeatWear(redis, userIds) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const out = new Map();
+  const raw = await redis.mget(ids.map(seatWearKey));
+  ids.forEach((id, i) => {
+    const value = raw?.[i];
+    if (!value) return;
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object") out.set(id, parsed);
+    } catch {
+      // treat unparseable as a miss
+    }
+  });
+  return out;
+}
+async function msetSeatWear(redis, wearByUser, ttlSec = SEAT_WEAR_TTL_SEC) {
+  if (!wearByUser || typeof wearByUser.forEach !== "function") return;
+  const ttl = Math.max(30, Number(ttlSec) || SEAT_WEAR_TTL_SEC);
+  const pipe = redis.pipeline();
+  let any = false;
+  wearByUser.forEach((wear, userId) => {
+    if (!userId || !wear || typeof wear !== "object") return;
+    pipe.set(seatWearKey(String(userId)), JSON.stringify(wear), "EX", ttl);
+    any = true;
+  });
+  if (any) await pipe.exec();
+}
+async function clearSeatWear(redis, userIds) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return;
+  await redis.del(...ids.map(seatWearKey));
 }
 const APP_ONLINE_TTL_SEC = Number(process.env.APP_ONLINE_TTL_SEC || 90);
 function appOnlineKey(userId) {
@@ -274,6 +349,7 @@ module.exports = {
   PRESENCE_TTL_SEC: PRESENCE_TTL_SEC,
   MEDIA_STATE_TTL_SEC: MEDIA_STATE_TTL_SEC,
   APP_ONLINE_TTL_SEC: APP_ONLINE_TTL_SEC,
+  SEAT_WEAR_TTL_SEC: SEAT_WEAR_TTL_SEC,
   nextSeq: nextSeq,
   setSeatsSnapshot: setSeatsSnapshot,
   getSeatsSnapshot: getSeatsSnapshot,
@@ -294,6 +370,9 @@ module.exports = {
   getUserPresenceRoom: getUserPresenceRoom,
   listPresence: listPresence,
   presenceCount: presenceCount,
+  mgetSeatWear: mgetSeatWear,
+  msetSeatWear: msetSeatWear,
+  clearSeatWear: clearSeatWear,
   setAppOnline: setAppOnline,
   clearAppOnline: clearAppOnline,
   isAppOnline: isAppOnline,

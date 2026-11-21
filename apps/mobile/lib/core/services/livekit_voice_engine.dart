@@ -183,12 +183,23 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
     final room = lk.Room(
       roomOptions: const lk.RoomOptions(
-        adaptiveStream: true,
-        dynacast: true,
+        // This room is audio only. Adaptive stream and dynacast exist to pause
+        // and re-size video layers nobody is looking at; with no video they
+        // buy nothing and cost a stream of renegotiations, which on a weak
+        // connection is heard as the audio breaking up.
+        adaptiveStream: false,
+        dynacast: false,
         defaultAudioCaptureOptions: lk.AudioCaptureOptions(
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+        ),
+        // 32 kbps Opus with DTX: plenty for speech, a third of the default
+        // music preset, and silence costs nothing. This is what keeps a room
+        // of ten publishers inside a cheap phone's uplink.
+        defaultAudioPublishOptions: lk.AudioPublishOptions(
+          encoding: lk.AudioEncoding(maxBitrate: 32000),
+          dtx: true,
         ),
       ),
     );
@@ -219,6 +230,12 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _events = events;
     _appRoomId = session.appRoomId ?? session.orbitRoomId;
 
+    // The audio session type is decided once, here, from the grant in the
+    // token — call audio for someone who may speak, media playback for a
+    // listener. It used to be flipped on every mic toggle, and each flip
+    // handed routing back to Android (which picks the earpiece) and dropped
+    // playback to the much quieter call volume mid-room.
+    await _applyAudioSessionFor(publishing: session.canPublish);
     await room.connect(session.livekitUrl, session.token);
     await _reassertSpeakerRoute();
     // From here a headset plugged in mid-call re-routes straight away.
@@ -276,35 +293,12 @@ class LiveKitVoiceEngine implements VoiceEngine {
       return false;
     }
     try {
-      // Playout is initialised with media attributes so listening is at media
-      // volume rather than the much quieter call stream. Capture still wants
-      // communication mode for echo cancellation, so move the session there
-      // only while the microphone is actually live.
-      await _applyAudioSessionFor(publishing: enabled);
+      // Just the microphone. The audio session and the output route were both
+      // settled at connect and are left alone: muting and unmuting used to
+      // trigger a session switch plus four route re-asserts spread over 2.8
+      // seconds, and that churn is what made voice cut in and out and jump
+      // between the speaker and the earpiece every time someone took the mic.
       await local.setMicrophoneEnabled(enabled);
-      // Only once the mic has settled. Communication mode hands routing back
-      // to Android, which defaults to the earpiece, so the user's speaker
-      // choice has to be re-applied — but doing it mid-transition risks the
-      // session itself, so it happens strictly after.
-      await _reassertSpeakerRoute();
-      // AudioSwitch can re-select a device moments after capture starts, which
-      // would silently put the room back on the earpiece. Settle it again once
-      // the stack has stopped moving.
-      if (enabled) {
-        // Two passes, because AudioSwitch settles in stages: it re-selects once
-        // shortly after capture starts, and again a couple of seconds later
-        // when the device list stabilises. A single 600ms pass covered only the
-        // first, which is why a headset kept its audio for 2-3 seconds and then
-        // lost it to the speaker.
-        for (final ms in const [600, 1500, 2800]) {
-          unawaited(
-            Future<void>.delayed(
-              Duration(milliseconds: ms),
-              _reassertSpeakerRoute,
-            ),
-          );
-        }
-      }
       return hasLiveMicTrack == enabled;
     } catch (e) {
       debugPrint('[LK] setMicEnabled($enabled): $e');

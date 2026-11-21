@@ -118,11 +118,16 @@ class OrbitVoiceSessionService {
     return _toSkMap(session);
   }
 
+  /// [canPublish] must be the grant from the token that was just minted. The
+  /// engine picks the audio session type from it once, at connect, so a host
+  /// gets call-mode capture and a listener gets media-volume playback without
+  /// anything being flipped mid-room.
   static Future<bool> connect({
     required String livekitUrl,
     required String token,
     bool forceReconnect = false,
     String? skLiveRoomId,
+    bool canPublish = false,
   }) {
     return AppTelemetry.traceAsync('voice_join', () async {
       _wireFetcher();
@@ -145,8 +150,8 @@ class OrbitVoiceSessionService {
             livekitUrl: livekitUrl,
             livekitRoom: orbitId,
             orbitRoomId: orbitId,
-            canPublish: false,
-            role: 'listener',
+            canPublish: canPublish,
+            role: canPublish ? 'speaker' : 'listener',
             appRoomId: skLiveRoomId ?? _cachedSkLiveRoomId,
           ),
         );

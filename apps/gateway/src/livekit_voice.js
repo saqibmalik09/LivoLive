@@ -4,6 +4,18 @@ const db = require("./db");
 const TOKEN_TTL_SECONDS = 6 * 60 * 60;
 const ADMIN_TOKEN_TTL_SECONDS = 60;
 const PERMISSION_SYNC_TIMEOUT_MS = 2000;
+// How long a token mint is willing to wait for the admin-API permission sync
+// before replying anyway. The sync keeps running in the background; the caller
+// sees perm_sync = "pending" instead of a token that arrives seconds late.
+const PERMISSION_SYNC_WAIT_MS = Number(
+  process.env.LIVEKIT_PERM_SYNC_WAIT_MS || 250,
+);
+function sleep(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === "function") timer.unref();
+  });
+}
 
 function resolveConfig(settings) {
   return {
@@ -178,8 +190,14 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
 
   // Grant/revoke on the live connection too, so an already-connected client does
   // not have to reconnect just to pick up a permission change.
+  //
+  // The token above is already valid for publishing, so this call is a courtesy
+  // for a client that is connected right now — it must never hold up the reply.
+  // Waiting on the LiveKit admin API here is what made taking the mic feel like
+  // it hung: a slow or unreachable server cost every caller the full timeout
+  // before they received a token they could have used immediately.
   t = Date.now();
-  const permSync = await syncLivePermission({
+  const permSyncPromise = syncLivePermission({
     url: cfg.url,
     apiKey: cfg.apiKey,
     apiSecret: cfg.apiSecret,
@@ -187,6 +205,28 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
     identity: String(userId),
     canPublish: canPublish,
   });
+  const syncStartedAt = t;
+  permSyncPromise.then(
+    (result) => {
+      const elapsed = Date.now() - syncStartedAt;
+      if (result !== "updated" && result !== "not_connected") {
+        console.warn(
+          `[voice:livekit] perm sync late room=${room} user=${userId} ` +
+            `perm=${result} (${elapsed}ms)`,
+        );
+      }
+    },
+    (err) => {
+      console.warn(
+        `[voice:livekit] perm sync threw room=${room} user=${userId}:`,
+        err?.message || err,
+      );
+    },
+  );
+  const permSync = await Promise.race([
+    permSyncPromise,
+    sleep(PERMISSION_SYNC_WAIT_MS).then(() => "pending"),
+  ]);
   mark("livekit_perm_sync_ms", t);
 
   console.log(

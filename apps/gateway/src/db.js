@@ -1,5 +1,12 @@
 const { Pool: Pool } = require("pg");
 let pool = null;
+// A room join runs several queries and a cold seat snapshot runs three more.
+// At 8 connections those queued behind each other, so tail latency on a busy
+// box was seconds of pure waiting rather than query time.
+function mainPoolMax() {
+  const n = Number(process.env.DB_POOL_MAX);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 64) : 24;
+}
 function getPool() {
   if (pool) return pool;
   const connectionString = process.env.DATABASE_URL;
@@ -12,7 +19,7 @@ function getPool() {
     ssl: connectionString.includes("supabase.com")
       ? { rejectUnauthorized: false }
       : undefined,
-    max: 8,
+    max: mainPoolMax(),
   });
   pool.on("error", (err) => console.error("[db] pool error:", err.message));
   return pool;
@@ -96,7 +103,7 @@ async function withGameClient(waitMs, fn) {
 let giftPool = null;
 function giftPoolMax() {
   const n = Number(process.env.GIFT_DB_POOL_MAX);
-  return Number.isInteger(n) && n > 0 ? n : 6;
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 64) : 16;
 }
 function getGiftPool() {
   if (giftPool) return giftPool;
@@ -122,7 +129,14 @@ async function giftQuery(text, params) {
   return p.query(text, params);
 }
 
-async function loadRoomSeats(roomId) {
+/**
+ * Loads one room's seats.
+ *
+ * `wearResolver` lets the caller serve frame/badge data from a cache and only
+ * fall back to SQL for users it has never seen. Omit it and the wear is loaded
+ * straight from Postgres, which is what the original call did.
+ */
+async function loadRoomSeats(roomId, { wearResolver } = {}) {
   const { rows: rows } = await query(
     `SELECT s.id, s.room_id, s.user_id, s.seat_index, s.is_muted, s.is_locked, s.updated_at,\n            u.username, u.avatar_url, u.vip_level\n     FROM room_seats s\n     LEFT JOIN users u ON u.id = s.user_id\n     WHERE s.room_id = $1\n     ORDER BY s.seat_index ASC`,
     [roomId],
@@ -144,8 +158,24 @@ async function loadRoomSeats(roomId) {
         }
       : null,
   }));
-  await attachSeatWear(seats);
+  if (wearResolver) {
+    const ids = seatUserIds(seats);
+    if (ids.length) applySeatWear(seats, await wearResolver(ids));
+  } else {
+    await attachSeatWear(seats);
+  }
   return seats;
+}
+function seatUserIds(seats) {
+  const ids = [];
+  const seen = new Set();
+  for (const seat of seats || []) {
+    const id = seat && seat.user_id ? String(seat.user_id) : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
 }
 function wearText(value) {
   return value == null ? "" : String(value);
@@ -185,18 +215,26 @@ function isSeatMedal(category, sourceType) {
   );
 }
 async function attachSeatWear(seats) {
-  const ids = [];
-  for (const seat of seats) {
-    if (seat && seat.user_id && !ids.includes(seat.user_id)) {
-      ids.push(seat.user_id);
-    }
-  }
+  const ids = seatUserIds(seats);
   if (!ids.length) return;
-  let inventory;
-  let levels;
-  try {
-    const [invRes, levelRes] = await Promise.all([
-      query(
+  applySeatWear(seats, await loadSeatWearForUsers(ids));
+}
+/**
+ * Resolves frame + badge data for a set of users straight from Postgres.
+ *
+ * Returns a Map keyed by user id. Every requested id gets an entry when the
+ * inventory and level reads succeed, even when the user wears nothing, because
+ * the client treats a seat without these fields as "wear unknown" and falls
+ * back to its own fan-out of queries.
+ */
+async function loadSeatWearForUsers(userIds) {
+  const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
+  const wearByUser = new Map();
+  if (!ids.length) return wearByUser;
+  // All three reads go out together. The agency read used to run after the
+  // other two finished, which made a cold snapshot two round trips deep.
+  const [invRes, levelRes, agencyRes] = await Promise.allSettled([
+    query(
         `SELECT ui.user_id, si.image_url, si.svga_url, si.name,
                 lower(coalesce(si.source_type, '')) AS source_type,
                 lower(coalesce(sc.name, '')) AS category
@@ -249,16 +287,7 @@ async function attachSeatWear(seats) {
          WHERE u.id = ANY($1::uuid[])`,
         [ids],
       ),
-    ]);
-    inventory = invRes.rows || [];
-    levels = levelRes.rows || [];
-  } catch (err) {
-    console.warn("[seats] wear attach skipped:", err.message);
-    return;
-  }
-  const agencyByUser = new Map();
-  try {
-    const { rows: agencyRows } = await query(
+    query(
       `SELECT u.id AS user_id,
               COALESCE(owned.name, mem.name, 'Agency') AS name,
               COALESCE(owned.id, mem.id) AS agency_id,
@@ -287,12 +316,25 @@ async function attachSeatWear(seats) {
        ) alc ON alc.badge_url IS NOT NULL AND alc.badge_url <> ''
        WHERE u.id = ANY($1::uuid[])`,
       [ids],
-    );
-    for (const row of agencyRows || []) {
+    ),
+  ]);
+  if (invRes.status !== "fulfilled" || levelRes.status !== "fulfilled") {
+    const reason = invRes.reason || levelRes.reason;
+    console.warn("[seats] wear attach skipped:", reason?.message || reason);
+    return wearByUser;
+  }
+  const inventory = invRes.value.rows || [];
+  const levels = levelRes.value.rows || [];
+  const agencyByUser = new Map();
+  if (agencyRes.status === "fulfilled") {
+    for (const row of agencyRes.value.rows || []) {
       agencyByUser.set(String(row.user_id), row);
     }
-  } catch (err) {
-    console.warn("[seats] agency badge skipped:", err.message);
+  } else {
+    console.warn(
+      "[seats] agency badge skipped:",
+      agencyRes.reason?.message || agencyRes.reason,
+    );
   }
   const invByUser = new Map();
   for (const row of inventory) {
@@ -303,9 +345,7 @@ async function attachSeatWear(seats) {
   }
   const levelByUser = new Map();
   for (const row of levels) levelByUser.set(String(row.user_id), row);
-  for (const seat of seats) {
-    if (!seat || !seat.user || !seat.user_id) continue;
-    const id = String(seat.user_id);
+  for (const id of ids) {
     const items = invByUser.get(id) || [];
     const level = levelByUser.get(id);
     let frameImage = "";
@@ -413,9 +453,23 @@ async function attachSeatWear(seats) {
       });
     }
     badges.sort((a, b) => a.priority - b.priority);
-    seat.user.frame_image_url = frameImage;
-    seat.user.frame_svga_url = frameSvga;
-    seat.user.badges = badges;
+    wearByUser.set(id, {
+      frame_image_url: frameImage,
+      frame_svga_url: frameSvga,
+      badges: badges,
+    });
+  }
+  return wearByUser;
+}
+function applySeatWear(seats, wearByUser) {
+  if (!wearByUser || typeof wearByUser.get !== "function") return;
+  for (const seat of seats || []) {
+    if (!seat || !seat.user || !seat.user_id) continue;
+    const wear = wearByUser.get(String(seat.user_id));
+    if (!wear) continue;
+    seat.user.frame_image_url = wear.frame_image_url;
+    seat.user.frame_svga_url = wear.frame_svga_url;
+    seat.user.badges = wear.badges;
   }
 }
 async function loadRoomMeta(roomId) {
@@ -843,6 +897,9 @@ module.exports = {
   getGiftPool: getGiftPool,
   giftQuery: giftQuery,
   loadRoomSeats: loadRoomSeats,
+  loadSeatWearForUsers: loadSeatWearForUsers,
+  applySeatWear: applySeatWear,
+  seatUserIds: seatUserIds,
   loadRoomMeta: loadRoomMeta,
   updateRoomSharedAudioState: updateRoomSharedAudioState,
   isSuperBd: isSuperBd,

@@ -134,6 +134,7 @@ class RoomMinimizedKeepAlive {
         token: token,
         forceReconnect: true,
         skLiveRoomId: roomId,
+        canPublish: session['can_publish'] == true,
       );
       if (!connected) return;
 

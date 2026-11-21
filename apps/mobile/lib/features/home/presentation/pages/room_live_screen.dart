@@ -546,7 +546,18 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   DateTime? _lastRepeatGiftAt;
   Timer? _repeatGiftHideTimer;
 
-  static const int _maxRepeatGiftInFlight = 8;
+  /// Repeat taps in flight at once.
+  ///
+  /// send_gift locks the sender's balance row, so parallel sends from one
+  /// person serialise in Postgres no matter how many are launched — eight only
+  /// meant eight gift-pool connections held while they queued, which is what
+  /// made everyone else's gifts crawl once one person started tapping. Three
+  /// keeps the same throughput for the tapper and leaves the pool for the room.
+  static const int _maxRepeatGiftInFlight = 3;
+
+  /// Ceiling on queued repeat taps. Holding the button must not grow a list
+  /// forever; each tap's own animation has already played by then.
+  static const int _maxRepeatGiftQueued = 60;
 
   static const Duration _repeatGiftVisibleFor = Duration(seconds: 3);
 
@@ -3112,6 +3123,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       token: token,
       forceReconnect: true,
       skLiveRoomId: roomId,
+      canPublish: session['can_publish'] == true,
     );
     if (!ok) return false;
 
@@ -3259,6 +3271,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         token: token,
         forceReconnect: wasConnected,
         skLiveRoomId: roomId,
+        canPublish: canPublish,
       );
       if (!ok) {
         debugPrint('[ORBIT] publish reconnect failed');
@@ -3486,6 +3499,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         token: token,
         forceReconnect: forceReconnect,
         skLiveRoomId: roomId,
+        canPublish: canPublish,
       );
       var connected = ok;
       if (!connected) {
@@ -3505,6 +3519,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             token: retryToken,
             forceReconnect: true,
             skLiveRoomId: roomId,
+            canPublish: retry?['can_publish'] == true,
           );
         }
       }
@@ -9362,6 +9377,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           content: Text('Insufficient balance!'),
           backgroundColor: Colors.redAccent,
         ),
+      );
+      return;
+    }
+
+    if (_repeatGiftQueue.length >= _maxRepeatGiftQueued) {
+      debugPrint(
+        '[GIFT_DRAIN] tap dropped — queue full (${_repeatGiftQueue.length})',
       );
       return;
     }

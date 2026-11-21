@@ -5,6 +5,7 @@
   "description": "Socket.IO gateway backed by Redis pub/sub for Rave Star rooms",
   "main": "src/server.js",
   "scripts": {
+    "lint": "node --check src/server.js && node --check src/db.js && node --check src/redis_state.js && node --check src/livekit_voice.js && node --check src/gift_settle.js && node --check src/keyed_queue.js",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },

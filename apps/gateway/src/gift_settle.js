@@ -22,13 +22,49 @@ function isLuckyProCategory(categoryName) {
   const n = normalizeCategory(categoryName);
   return n === "lucky pro" || n === "lucky_pro" || n === "luckypro";
 }
+// Shop items barely change, yet every single tap of a combo re-read the row.
+// A short TTL keeps an admin price edit visible within a minute while taking
+// the lookup out of the send path.
+const GIFT_CACHE_TTL_MS = Number(process.env.GIFT_CACHE_TTL_MS || 60e3);
+const GIFT_CACHE_MAX = 500;
+const giftCache = new Map();
+function cacheGet(cache, key) {
+  const hit = cache.get(key);
+  if (!hit) return undefined;
+  if (hit.expires <= Date.now()) {
+    cache.delete(key);
+    return undefined;
+  }
+  return hit.value;
+}
+function cacheSet(cache, key, value, ttlMs, maxEntries) {
+  if (cache.size >= maxEntries) {
+    // Oldest insertion first: enough to keep the map bounded without an LRU.
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
+  cache.set(key, { value: value, expires: Date.now() + ttlMs });
+}
 async function loadGift(giftId) {
+  const key = String(giftId);
+  const cached = cacheGet(giftCache, key);
+  if (cached !== undefined) return cached;
+  const gift = await loadGiftFromDb(giftId);
+  cacheSet(giftCache, key, gift, GIFT_CACHE_TTL_MS, GIFT_CACHE_MAX);
+  return gift;
+}
+async function loadGiftFromDb(giftId) {
   const { rows: rows } = await db.giftQuery(
     `SELECT si.id, si.name, si.price_coins,\n            coalesce(si.image_url, '') AS icon_url,\n            si.svga_url, si.is_full_screen,\n            lower(coalesce(sc.name, '')) AS category_name\n     FROM public.shop_items si\n     LEFT JOIN public.shop_categories sc ON sc.id = si.category_id\n     WHERE si.id = $1 AND si.is_active = TRUE\n     LIMIT 1`,
     [giftId],
   );
   return rows[0] || null;
 }
+// Display name and avatar for gift text. The same handful of people gift each
+// other repeatedly in a room, so this query was re-running per tap.
+const PROFILE_CACHE_TTL_MS = Number(process.env.GIFT_PROFILE_CACHE_TTL_MS || 60e3);
+const PROFILE_CACHE_MAX = 5000;
+const profileCache = new Map();
 async function loadUsernames(userIds) {
   const ids = [
     ...new Set(
@@ -36,16 +72,31 @@ async function loadUsernames(userIds) {
     ),
   ];
   if (!ids.length) return {};
+  const out = {};
+  const missing = [];
+  for (const id of ids) {
+    const hit = cacheGet(profileCache, id);
+    if (hit !== undefined) out[id] = hit;
+    else missing.push(id);
+  }
+  if (!missing.length) return out;
   const { rows: rows } = await db.giftQuery(
     `SELECT id::text AS id, username, avatar_url\n     FROM public.users\n     WHERE id = ANY($1::uuid[])`,
-    [ids],
+    [missing],
   );
-  const out = {};
   for (const r of rows) {
-    out[r.id] = {
+    const profile = {
       username: r.username || "User",
       avatar_url: r.avatar_url || null,
     };
+    out[r.id] = profile;
+    cacheSet(
+      profileCache,
+      r.id,
+      profile,
+      PROFILE_CACHE_TTL_MS,
+      PROFILE_CACHE_MAX,
+    );
   }
   return out;
 }
@@ -288,22 +339,32 @@ async function buildNotifyFromSettle({
     anyLuckyPro: anyLuckyPro,
   };
 }
+// One insert for the whole batch. Gifting every seat used to run one round trip
+// per receiver, so a nine-seat gift held a gift-pool connection nine times.
 async function persistGiftMessages(messages) {
-  if (!Array.isArray(messages) || !messages.length) return;
-  for (const msg of messages) {
-    try {
-      await db.giftQuery(
-        `INSERT INTO public.room_messages (room_id, user_id, content, type, metadata)\n         VALUES ($1::uuid, $2::uuid, $3, 'gift', $4::jsonb)`,
-        [
-          msg.room_id,
-          msg.user_id,
-          msg.content,
-          JSON.stringify(msg.metadata || {}),
-        ],
-      );
-    } catch (err) {
-      console.warn("[gift_settle] room_messages insert failed:", err.message);
-    }
+  const rows = (Array.isArray(messages) ? messages : []).filter(
+    (msg) => msg && msg.room_id && msg.user_id,
+  );
+  if (!rows.length) return;
+  const values = [];
+  const params = [];
+  for (const msg of rows) {
+    const i = params.length;
+    values.push(`($${i + 1}::uuid, $${i + 2}::uuid, $${i + 3}, 'gift', $${i + 4}::jsonb)`);
+    params.push(
+      msg.room_id,
+      msg.user_id,
+      msg.content,
+      JSON.stringify(msg.metadata || {}),
+    );
+  }
+  try {
+    await db.giftQuery(
+      `INSERT INTO public.room_messages (room_id, user_id, content, type, metadata)\n       VALUES ${values.join(", ")}`,
+      params,
+    );
+  } catch (err) {
+    console.warn("[gift_settle] room_messages insert failed:", err.message);
   }
 }
 const RANK_FLUSH_MS = 2e3;
