@@ -145,6 +145,7 @@ async function mintVoiceToken({
   userId: userId,
   userName: userName,
   payload: payload = {},
+  openPublish: openPublish = false,
 }) {
   const t0 = Date.now();
   const timings = {};
@@ -206,6 +207,7 @@ async function mintVoiceToken({
       payload: payload,
       settings: settings,
       timings: timings,
+      openPublish: openPublish,
     });
   }
   if (backend !== "orbit") {
@@ -513,7 +515,13 @@ async function mintVoiceToken({
  * Returns null if LiveKit is unconfigured or signing failed; callers omit the
  * voice fields rather than failing the action.
  */
-async function mintVoiceTokenFor({ userId, userName, roomId, canPublish }) {
+async function mintVoiceTokenFor({
+  userId,
+  userName,
+  roomId,
+  canPublish,
+  openPublish = false,
+}) {
   if (!userId || String(userId).startsWith("anon:")) return null;
   if (!roomId) return null;
   let settings;
@@ -528,6 +536,25 @@ async function mintVoiceTokenFor({ userId, userName, roomId, canPublish }) {
     userName: userName,
     roomId: roomId,
     canPublish: canPublish,
+    settings: settings,
+    openPublish: openPublish,
+  });
+}
+
+/**
+ * Checks a LiveKit webhook delivery's signature against the configured API key
+ * and returns the parsed event, or null when it does not verify.
+ */
+async function verifyLivekitWebhook({ authHeader, rawBody }) {
+  let settings;
+  try {
+    settings = await loadOrbitSettings();
+  } catch (e) {
+    return null;
+  }
+  return await livekitVoice.verifyWebhook({
+    authHeader: authHeader,
+    rawBody: rawBody,
     settings: settings,
   });
 }
@@ -567,6 +594,8 @@ module.exports = {
   mintVoiceToken: mintVoiceToken,
   mintVoiceTokenFor: mintVoiceTokenFor,
   syncLivePermission: syncLivePermission,
+  verifyLivekitWebhook: verifyLivekitWebhook,
+  roomIdFromLivekitRoom: livekitVoice.roomIdFromLivekitRoom,
   clearSettingsCache: clearSettingsCache,
   loadOrbitSettings: loadOrbitSettings,
 };

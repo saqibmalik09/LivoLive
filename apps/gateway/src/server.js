@@ -97,6 +97,63 @@ app.get("/health", async (_req, res) => {
     ts: Date.now(),
   });
 });
+// LiveKit webhook: the server-side half of open voice tokens. A holder of an
+// open token can technically publish their microphone from the moment they join,
+// so every microphone track_published event is checked against the seat table.
+// Someone with no seat (and no seat tap in flight) loses publish permission.
+// The body is read raw because the signature covers the exact bytes.
+async function mayPublishNow(roomId, userId) {
+  if (preparedGrants.has(`${roomId}:${userId}`)) return true;
+  return (await redisSeatIndexForUser(roomId, userId)) != null;
+}
+async function enforceSeatPublish(event) {
+  if (event?.event !== "track_published") return;
+  if (String(event.track?.type || "").toUpperCase() !== "AUDIO") return;
+  const userId = String(event.participant?.identity || "");
+  const roomId = orbitVoice.roomIdFromLivekitRoom(event.room?.name);
+  if (!userId || !roomId) return;
+  // Users on the grant-on-seat path cannot publish without a grant already.
+  if (!isOpenVoice(roomId, userId)) return;
+  if (await mayPublishNow(roomId, userId)) return;
+  // The seat write can land a moment after the track appears; look again
+  // before treating it as unauthorised.
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, SEAT_ENFORCE_GRACE_MS);
+    if (typeof timer.unref === "function") timer.unref();
+  });
+  if (await mayPublishNow(roomId, userId)) return;
+  console.warn(
+    `[voice:webhook] publish without seat room=${roomId} user=${userId} ` +
+      `enforce=${VOICE_WEBHOOK_ENFORCE}`,
+  );
+  if (!VOICE_WEBHOOK_ENFORCE) return;
+  openVoiceRevoked.add(openVoiceKey(roomId, userId));
+  const result = await orbitVoice.syncLivePermission({
+    userId: userId,
+    roomId: roomId,
+    canPublish: false,
+  });
+  if (result !== "updated" && result !== "not_connected") {
+    console.warn(
+      `[voice:webhook] revoke failed room=${roomId} user=${userId} perm=${result}`,
+    );
+  }
+}
+app.post(
+  "/livekit/webhook",
+  express.raw({ type: "*/*", limit: "256kb" }),
+  async (req, res) => {
+    const event = await orbitVoice.verifyLivekitWebhook({
+      authHeader: req.get("authorization"),
+      rawBody: req.body,
+    });
+    if (!event) return res.status(401).end();
+    res.status(200).end();
+    void enforceSeatPublish(event).catch((err) =>
+      console.warn("[voice:webhook] enforce failed:", err?.message || err),
+    );
+  },
+);
 const server = http.createServer(app);
 applyKeepAlive(server);
 const shutdown = installGracefulShutdown({ server: server });
@@ -611,6 +668,41 @@ async function persistRoomMembership(roomId, userId) {
 const VOICE_INLINE_TIMEOUT_MS = Number(
   process.env.VOICE_INLINE_TIMEOUT_MS || 400,
 );
+// Open voice tokens. A client that announces `voice_cap: "seat_token"` at
+// connect gets a LiveKit token that already allows publishing the microphone,
+// so taking a seat needs no live admin call (that call stalled 0.6-1.5 s under
+// load). Seats stay authoritative: publishing without one is cut by the
+// track_published webhook below. VOICE_OPEN_TOKENS=0 turns the feature off and
+// every client falls back to the grant-on-seat path.
+const VOICE_OPEN_TOKENS_ON = process.env.VOICE_OPEN_TOKENS !== "0";
+const VOICE_WEBHOOK_ENFORCE = process.env.VOICE_WEBHOOK_ENFORCE !== "0";
+const SEAT_ENFORCE_GRACE_MS = Number(process.env.SEAT_ENFORCE_GRACE_MS || 2500);
+const OPEN_VOICE_MAX = 50000;
+// room:user pairs whose current LiveKit token is an open one. Bounded: when
+// full the oldest entry goes, which only means that user falls back to the
+// grant call on their next seat change.
+const openVoiceUsers = new Set();
+// Open users whose publish the webhook took away; the next seat action
+// re-grants it in the background.
+const openVoiceRevoked = new Set();
+function openVoiceKey(roomId, userId) {
+  return `${roomId}:${userId}`;
+}
+function markOpenVoice(roomId, userId, open) {
+  if (!roomId || !userId) return;
+  const key = openVoiceKey(roomId, userId);
+  if (!open) {
+    openVoiceUsers.delete(key);
+    return;
+  }
+  if (!openVoiceUsers.has(key) && openVoiceUsers.size >= OPEN_VOICE_MAX) {
+    openVoiceUsers.delete(openVoiceUsers.values().next().value);
+  }
+  openVoiceUsers.add(key);
+}
+function isOpenVoice(roomId, userId) {
+  return openVoiceUsers.has(openVoiceKey(roomId, userId));
+}
 /**
  * Builds the voice session to send with a room:join ack.
  *
@@ -621,7 +713,13 @@ const VOICE_INLINE_TIMEOUT_MS = Number(
  * Returns null when LiveKit is unconfigured or the signer failed, so a join
  * still succeeds and the client falls back to asking for a token.
  */
-async function voiceSessionFromSnapshot(snapshot, userId, user, roomId) {
+async function voiceSessionFromSnapshot(
+  snapshot,
+  userId,
+  user,
+  roomId,
+  openPublish = false,
+) {
   if (!userId || String(userId).startsWith("anon:")) return null;
   const seats = Array.isArray(snapshot?.seats) ? snapshot.seats : [];
   const canPublish = seats.some((s) => seatOccupantId(s) === String(userId));
@@ -630,12 +728,18 @@ async function voiceSessionFromSnapshot(snapshot, userId, user, roomId) {
     // a cold cache. Capped so a slow database can never hold up a join: the
     // client simply asks for a token the old way instead.
     return await Promise.race([
-      orbitVoice.mintVoiceTokenFor({
-        userId: userId,
-        userName: user?.username || user?.name || userId,
-        roomId: roomId,
-        canPublish: canPublish,
-      }),
+      orbitVoice
+        .mintVoiceTokenFor({
+          userId: userId,
+          userName: user?.username || user?.name || userId,
+          roomId: roomId,
+          canPublish: canPublish,
+          openPublish: openPublish,
+        })
+        .then((session) => {
+          markOpenVoice(roomId, userId, !!session && openPublish);
+          return session;
+        }),
       new Promise((resolve) => {
         const timer = setTimeout(() => resolve(null), VOICE_INLINE_TIMEOUT_MS);
         if (typeof timer.unref === "function") timer.unref();
@@ -664,6 +768,11 @@ function clearPreparedGrant(roomId, userId) {
 function revokeLivePublish(roomId, userId, reason) {
   if (!roomId || !userId) return;
   clearPreparedGrant(roomId, userId);
+  // An open token's holder keeps the microphone grant for the whole session and
+  // unpublishes on its own when it leaves the seat; taking it away here would
+  // make their next sit wait on the slow admin call again. A publish without a
+  // seat is handled by the track_published webhook instead.
+  if (isOpenVoice(roomId, userId)) return;
   void orbitVoice
     .syncLivePermission({ userId: userId, roomId: roomId, canPublish: false })
     .then(
@@ -765,36 +874,46 @@ async function handleSeatClaim(socket, payload, ack, { withVoice }) {
     if (withVoice) {
       // The seat now backs the grant, so the early-grant expiry is moot.
       clearPreparedGrant(roomId, userId);
+      const openPublish = !!socket.data.voiceOpen;
       voice = await orbitVoice
         .mintVoiceTokenFor({
           userId: userId,
           userName: user?.username || user?.name || userId,
           roomId: roomId,
           canPublish: true,
+          openPublish: openPublish,
         })
         .catch((e) => {
           console.warn(`[${label}] inline voice:`, e.message);
           return null;
         });
+      markOpenVoice(roomId, userId, !!voice && openPublish);
+      // An open token needs no live grant. The only exception is a user the
+      // webhook cut earlier: their live permission is gone, so give it back in
+      // the background (the client falls back on its own if this is slow).
+      const needsRegrant =
+        !openPublish || openVoiceRevoked.delete(openVoiceKey(roomId, userId));
       // Grants publish on a connection that is already open, so a client that
       // joined as a listener does not have to reconnect. Fire-and-forget: the
       // token in the ack is already valid either way.
-      void orbitVoice
-        .syncLivePermission({
-          userId: userId,
-          roomId: roomId,
-          canPublish: true,
-        })
-        .then(
-          (result) => {
-            if (result !== "updated" && result !== "not_connected") {
-              console.warn(
-                `[${label}] perm sync room=${roomId} user=${userId} perm=${result}`,
-              );
-            }
-          },
-          (e) => console.warn(`[${label}] perm sync threw:`, e?.message || e),
-        );
+      if (needsRegrant) {
+        void orbitVoice
+          .syncLivePermission({
+            userId: userId,
+            roomId: roomId,
+            canPublish: true,
+          })
+          .then(
+            (result) => {
+              if (result !== "updated" && result !== "not_connected") {
+                console.warn(
+                  `[${label}] perm sync room=${roomId} user=${userId} perm=${result}`,
+                );
+              }
+            },
+            (e) => console.warn(`[${label}] perm sync threw:`, e?.message || e),
+          );
+      }
     }
     ackOk(ack, {
       event_id: eventId,
@@ -1652,6 +1771,8 @@ io.use(async (socket, next) => {
     if (payload?.sub) {
       socket.data.userId = String(payload.sub);
       socket.data.role = payload.role || "authenticated";
+      socket.data.voiceOpen =
+        VOICE_OPEN_TOKENS_ON && socket.handshake.auth?.voice_cap === "seat_token";
       return next();
     }
     if (ALLOW_ANON) {
@@ -1903,6 +2024,7 @@ io.on("connection", (socket) => {
         socket.data.userId,
         user,
         roomId,
+        !!socket.data.voiceOpen,
       );
       ackOk(ack, {
         room: `room:${roomId}`,
@@ -2067,11 +2189,24 @@ io.on("connection", (socket) => {
         return ackErr(ack, "seat_unavailable");
       }
       const prepSyncT0 = Date.now();
-      const perm = await orbitVoice.syncLivePermission({
-        userId: userId,
-        roomId: roomId,
-        canPublish: true,
-      });
+      // Holder of an open token: the microphone grant is already in the token,
+      // so there is nothing to wait for. Reply now; the prepared marker below is
+      // what lets the webhook tell this publish from an unauthorised one.
+      const openToken = !!socket.data.voiceOpen && isOpenVoice(roomId, userId);
+      let perm = "token";
+      if (!openToken) {
+        perm = await orbitVoice.syncLivePermission({
+          userId: userId,
+          roomId: roomId,
+          canPublish: true,
+        });
+      } else if (openVoiceRevoked.delete(openVoiceKey(roomId, userId))) {
+        void orbitVoice.syncLivePermission({
+          userId: userId,
+          roomId: roomId,
+          canPublish: true,
+        });
+      }
       console.log(
         `[seat:prepare] ok perm=${perm} seats=${prepSeatsMs}ms sync=${Date.now() - prepSyncT0}ms total=${Date.now() - prepT0}ms`,
       );
@@ -3041,10 +3176,12 @@ io.on("connection", (socket) => {
       if (!userId || String(userId).startsWith("anon:")) {
         return ackErr(ack, "unauthorized");
       }
+      const openPublish = !!socket.data.voiceOpen;
       const result = await orbitVoice.mintVoiceToken({
         userId: userId,
         userName: payload.name || userId,
         payload: payload,
+        openPublish: openPublish,
       });
       if (!result.ok) {
         if (typeof ack === "function") {
@@ -3052,6 +3189,11 @@ io.on("connection", (socket) => {
         }
         return;
       }
+      markOpenVoice(
+        String(payload.room_id || "").trim(),
+        userId,
+        openPublish && result.data?.lk_open === true,
+      );
       ackOk(ack, result.data);
     } catch (err) {
       console.error("[voice:token]", err);

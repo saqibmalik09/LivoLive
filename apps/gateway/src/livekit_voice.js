@@ -1,4 +1,5 @@
-const { SignJWT } = require("jose");
+const crypto = require("crypto");
+const { SignJWT, jwtVerify } = require("jose");
 const db = require("./db");
 
 const TOKEN_TTL_SECONDS = 6 * 60 * 60;
@@ -37,16 +38,30 @@ function livekitRoomName(roomId) {
   return `sklive_${String(roomId).replace(/-/g, "")}`;
 }
 
-async function signToken({ apiKey, apiSecret, identity, name, room, canPublish }) {
+// openPublish: the token itself carries the right to publish the microphone, so
+// taking a seat never needs a live admin call to LiveKit (that call is what
+// stalled 0.6-1.5 s under load). Only the microphone source is allowed, and the
+// SFU enforces that. Whether the user may actually speak is decided by the seat
+// table and enforced from LiveKit's track_published webhook.
+async function signToken({
+  apiKey,
+  apiSecret,
+  identity,
+  name,
+  room,
+  canPublish,
+  openPublish = false,
+}) {
   const now = Math.floor(Date.now() / 1e3);
   return await new SignJWT({
     name: name,
     video: {
       roomJoin: true,
       room: room,
-      canPublish: canPublish,
+      canPublish: !!canPublish || !!openPublish,
       canSubscribe: true,
       canPublishData: true,
+      ...(openPublish ? { canPublishSources: ["microphone"] } : {}),
     },
   })
     .setProtectedHeader({ alg: "HS256" })
@@ -167,7 +182,14 @@ async function syncLivePermissionOnce(
  * Publish permission comes from the durable room_seats table only — never from
  * the client's own open_mic/on_seat claim, exactly as the Orbit path does.
  */
-async function mintVoiceToken({ userId, userName, payload = {}, settings, timings = {} }) {
+async function mintVoiceToken({
+  userId,
+  userName,
+  payload = {},
+  settings,
+  timings = {},
+  openPublish = false,
+}) {
   const mark = (name, startedAt) => {
     timings[name] = Date.now() - startedAt;
   };
@@ -222,6 +244,7 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
       name: String(userName || userId),
       room: room,
       canPublish: canPublish,
+      openPublish: openPublish,
     });
   } catch (e) {
     console.error("[voice:livekit] sign failed", e?.message || e);
@@ -238,36 +261,41 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
   // it hung: a slow or unreachable server cost every caller the full timeout
   // before they received a token they could have used immediately.
   t = Date.now();
-  const permSyncPromise = syncLivePermission({
-    url: cfg.url,
-    apiKey: cfg.apiKey,
-    apiSecret: cfg.apiSecret,
-    room: room,
-    identity: String(userId),
-    canPublish: canPublish,
-  });
-  const syncStartedAt = t;
-  permSyncPromise.then(
-    (result) => {
-      const elapsed = Date.now() - syncStartedAt;
-      if (result !== "updated" && result !== "not_connected") {
+  // An open token already carries the microphone grant, so there is nothing to
+  // sync on the live connection and no admin call is made at all.
+  let permSync = "token";
+  if (!openPublish) {
+    const permSyncPromise = syncLivePermission({
+      url: cfg.url,
+      apiKey: cfg.apiKey,
+      apiSecret: cfg.apiSecret,
+      room: room,
+      identity: String(userId),
+      canPublish: canPublish,
+    });
+    const syncStartedAt = t;
+    permSyncPromise.then(
+      (result) => {
+        const elapsed = Date.now() - syncStartedAt;
+        if (result !== "updated" && result !== "not_connected") {
+          console.warn(
+            `[voice:livekit] perm sync late room=${room} user=${userId} ` +
+              `perm=${result} (${elapsed}ms)`,
+          );
+        }
+      },
+      (err) => {
         console.warn(
-          `[voice:livekit] perm sync late room=${room} user=${userId} ` +
-            `perm=${result} (${elapsed}ms)`,
+          `[voice:livekit] perm sync threw room=${room} user=${userId}:`,
+          err?.message || err,
         );
-      }
-    },
-    (err) => {
-      console.warn(
-        `[voice:livekit] perm sync threw room=${room} user=${userId}:`,
-        err?.message || err,
-      );
-    },
-  );
-  const permSync = await Promise.race([
-    permSyncPromise,
-    sleep(PERMISSION_SYNC_WAIT_MS).then(() => "pending"),
-  ]);
+      },
+    );
+    permSync = await Promise.race([
+      permSyncPromise,
+      sleep(PERMISSION_SYNC_WAIT_MS).then(() => "pending"),
+    ]);
+  }
   mark("livekit_perm_sync_ms", t);
 
   console.log(
@@ -289,6 +317,7 @@ async function mintVoiceToken({ userId, userName, payload = {}, settings, timing
       on_seat: onSeat,
       backend: "livekit",
       perm_sync: permSync,
+      ...(openPublish ? { lk_open: true } : {}),
       timings: timings,
     },
   };
@@ -312,6 +341,7 @@ async function mintVoiceTokenFor({
   roomId,
   canPublish,
   settings = {},
+  openPublish = false,
 }) {
   const cfg = resolveConfig(settings);
   if (!cfg.url || !cfg.apiKey || !cfg.apiSecret) return null;
@@ -324,19 +354,56 @@ async function mintVoiceTokenFor({
       name: String(userName || userId),
       room: room,
       canPublish: !!canPublish,
+      openPublish: openPublish,
     });
     return {
       token: token,
       livekit_url: cfg.url,
       livekit_room: room,
       orbit_room_id: room,
+      // Seat-derived, whatever the token allows: clients read this as "may
+      // speak", and an open token is deliberately wider than that.
       can_publish: !!canPublish,
       role: canPublish ? "speaker" : "listener",
       on_seat: !!canPublish,
       backend: "livekit",
+      ...(openPublish ? { lk_open: true } : {}),
     };
   } catch (e) {
     console.warn("[voice:livekit] inline sign failed:", e?.message || e);
+    return null;
+  }
+}
+
+// Inverse of livekitRoomName: "sklive_<32 hex>" back to the room uuid.
+function roomIdFromLivekitRoom(name) {
+  const m = /^sklive_([0-9a-f]{32})$/i.exec(String(name || ""));
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * Verifies a LiveKit webhook delivery. LiveKit signs the request with the API
+ * secret: the Authorization header is an HS256 JWT issued by the API key whose
+ * `sha256` claim is the base64 SHA-256 of the raw body. Returns the parsed event
+ * or null when the signature, issuer, or body hash does not match.
+ */
+async function verifyWebhook({ authHeader, rawBody, settings }) {
+  const cfg = resolveConfig(settings);
+  if (!cfg.apiKey || !cfg.apiSecret) return null;
+  const token = String(authHeader || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token || !Buffer.isBuffer(rawBody)) return null;
+  try {
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(cfg.apiSecret),
+      { issuer: cfg.apiKey, algorithms: ["HS256"] },
+    );
+    const digest = crypto.createHash("sha256").update(rawBody).digest("base64");
+    if (payload.sha256 !== digest) return null;
+    return JSON.parse(rawBody.toString("utf8"));
+  } catch (_) {
     return null;
   }
 }
@@ -346,4 +413,6 @@ module.exports = {
   mintVoiceTokenFor: mintVoiceTokenFor,
   syncLivePermission: syncLivePermission,
   livekitRoomName: livekitRoomName,
+  roomIdFromLivekitRoom: roomIdFromLivekitRoom,
+  verifyWebhook: verifyWebhook,
 };
