@@ -7,11 +7,37 @@ class RoomGamesSheet extends StatelessWidget {
     required this.games,
     required this.onGameTap,
     this.recentGames = const [],
+    this.scrollController,
   });
 
   final List<Map<String, dynamic>> games;
   final List<Map<String, dynamic>> recentGames;
   final void Function(Map<String, dynamic> game) onGameTap;
+
+  /// The list's controller when hosted in a [DraggableScrollableSheet].
+  ///
+  /// Handing the sheet's own controller to the list is what makes dragging
+  /// down follow the finger: Flutter moves the sheet once the list has no more
+  /// room to scroll, instead of the list winning the drag outright.
+  final ScrollController? scrollController;
+
+  /// Height this sheet wants, as a fraction of the screen.
+  ///
+  /// [DraggableScrollableSheet] sizes in fractions, so the row arithmetic that
+  /// used to produce a pixel `maxHeight` lives here and is shared with the
+  /// route that hosts it.
+  static double heightFraction(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    final gridWidth = size.width - 40;
+    final cellW =
+        (gridWidth - _crossAxisSpacing * (_crossAxisCount - 1)) /
+        _crossAxisCount;
+    final rowH = cellW / _childAspectRatio;
+    final rowsH = _visibleRows * rowH + (_visibleRows - 1) * _mainAxisSpacing;
+    const headerH = 108.0;
+    return ((headerH + rowsH + 16 + bottom) / size.height).clamp(0.35, 0.9);
+  }
 
   static const _crossAxisCount = 4;
   static const _mainAxisSpacing = 14.0;
@@ -70,23 +96,11 @@ class RoomGamesSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
-    final width = MediaQuery.sizeOf(context).width;
-    final gridWidth = width - 40;
-    final cellW =
-        (gridWidth - _crossAxisSpacing * (_crossAxisCount - 1)) /
-        _crossAxisCount;
-    final rowH = cellW / _childAspectRatio;
-    final fourRowsH =
-        _visibleRows * rowH + (_visibleRows - 1) * _mainAxisSpacing;
-    const headerH = 108.0;
-    final maxSheetH = headerH + fourRowsH + 16 + bottom;
-
     final sections = _sections();
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxSheetH),
+      child: SizedBox.expand(
         child: Container(
           decoration: BoxDecoration(
             color: _sheetBg.withValues(alpha: 0.95),
@@ -135,8 +149,8 @@ class RoomGamesSheet extends StatelessWidget {
                             strokeWidth: 2.4,
                           ),
                         )
-                      : _DragDownToDismiss(
-                          child: ListView.builder(
+                      : ListView.builder(
+                          controller: scrollController,
                           padding: EdgeInsets.zero,
                           itemCount: sections.length,
                           itemBuilder: (context, sIndex) {
@@ -193,8 +207,7 @@ class RoomGamesSheet extends StatelessWidget {
                                 ],
                               ),
                             );
-                            },
-                          ),
+                          },
                         ),
                 ),
               ],
@@ -202,61 +215,6 @@ class RoomGamesSheet extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Lets a downward drag on the games list close the sheet.
-///
-/// `showModalBottomSheet` has `enableDrag: true`, but the list inside wins the
-/// vertical drag in the gesture arena, so swiping down only scrolled and the
-/// user had to tap the barrier to close. Once the list is at its top, further
-/// downward pull is overscroll, and that is what dismisses here.
-class _DragDownToDismiss extends StatefulWidget {
-  const _DragDownToDismiss({required this.child});
-
-  final Widget child;
-
-  @override
-  State<_DragDownToDismiss> createState() => _DragDownToDismissState();
-}
-
-class _DragDownToDismissState extends State<_DragDownToDismiss> {
-  static const double _dismissAfter = 90;
-  double _pulled = 0;
-  bool _popped = false;
-
-  void _pull(double pixels) {
-    if (_popped || pixels <= 0) return;
-    _pulled += pixels;
-    if (_pulled < _dismissAfter) return;
-    _popped = true;
-    Navigator.maybePop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is OverscrollNotification) {
-          // Clamping physics (Android) reports the pull here; a negative
-          // overscroll is past the top edge.
-          if (notification.dragDetails != null) _pull(-notification.overscroll);
-        } else if (notification is ScrollUpdateNotification) {
-          // Bouncing physics (iOS) scrolls out of range instead of reporting
-          // overscroll, so measure how far past the top the list sits.
-          if (notification.dragDetails != null) {
-            final metrics = notification.metrics;
-            final past = metrics.minScrollExtent - metrics.pixels;
-            if (past >= _dismissAfter) _pull(past);
-          }
-        } else if (notification is ScrollStartNotification ||
-            notification is ScrollEndNotification) {
-          _pulled = 0;
-        }
-        return false;
-      },
-      child: widget.child,
     );
   }
 }

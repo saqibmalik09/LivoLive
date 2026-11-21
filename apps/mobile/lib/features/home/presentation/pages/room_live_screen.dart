@@ -12608,16 +12608,36 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (sheetContext) => ValueListenableBuilder<int>(
-        valueListenable: _gamesRev,
-        builder: (context, _, _) => RoomGamesSheet(
-          games: _activeGames,
-          recentGames: HiveCacheService.resolveRecentGames(_activeGames),
-          onGameTap: (game) {
-            Navigator.pop(sheetContext, game);
-          },
-        ),
-      ),
+      builder: (sheetContext) {
+        // DraggableScrollableSheet, not a plain sized child: it owns the list's
+        // scroll controller, so a downward drag moves the sheet with the finger
+        // once the list is at its top and lets go of it again on the way back
+        // up — the Instagram-style handoff. A plain modal sheet loses that drag
+        // to the list entirely, which is why only a barrier tap closed it.
+        final extent = RoomGamesSheet.heightFraction(sheetContext);
+        return DraggableScrollableSheet(
+          initialChildSize: extent,
+          minChildSize: extent * 0.5,
+          maxChildSize: extent,
+          expand: false,
+          snap: true,
+          snapSizes: [extent],
+          // Dragged down to minChildSize, close the route instead of parking
+          // the sheet half-open.
+          shouldCloseOnMinExtent: true,
+          builder: (context, scrollController) => ValueListenableBuilder<int>(
+            valueListenable: _gamesRev,
+            builder: (context, _, _) => RoomGamesSheet(
+              games: _activeGames,
+              recentGames: HiveCacheService.resolveRecentGames(_activeGames),
+              scrollController: scrollController,
+              onGameTap: (game) {
+                Navigator.pop(sheetContext, game);
+              },
+            ),
+          ),
+        );
+      },
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_fetchActiveGames());
