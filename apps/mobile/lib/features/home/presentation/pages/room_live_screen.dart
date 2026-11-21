@@ -357,6 +357,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   bool? _orbitLastBillingOpenMic;
   bool _voiceHealInFlight = false;
   Timer? _voiceHealDebounce;
+  // Number of _startSpeaking(true) calls currently running. A snapshot that
+  // lands while one is in flight sees "on seat, not publishing yet" and would
+  // schedule a heal that re-enters _startSpeaking, bumps the mic intent
+  // generation and rolls back the publish that was about to succeed.
+  int _startSpeakingOpenInFlight = 0;
+  // Last gateway snapshot applied, so the duplicates a join produces (cached
+  // seats, full snapshot, and the reply to our own snapshot request) do not
+  // each rebuild the whole screen.
+  String? _lastSnapshotSignature;
+  DateTime? _lastSnapshotAppliedAt;
+  static const Duration _snapshotDedupeWindow = Duration(seconds: 2);
 
   DateTime? _localUnmuteGuardUntil;
 
@@ -883,7 +894,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
       _setupGlobalWinSubscription();
       _loadChatAndWelcome();
-      _fetchActiveGames();
+      // The games sheet is not visible at entry. Parsing its catalog competes
+      // with the LiveKit signalling and the first seat snapshot for the main
+      // isolate, so it waits until the entry burst has settled.
+      Future<void>.delayed(const Duration(milliseconds: 2500), () {
+        if (mounted) _fetchActiveGames();
+      });
       _fetchCurrentUserRole();
       _startActivityTimer();
       unawaited(_fetchRoomLevelStats());
@@ -1650,6 +1666,20 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (snapRoom.isNotEmpty && roomId.isNotEmpty && snapRoom != roomId) {
       return;
     }
+    // A join delivers the same seat list several times within a second. The
+    // window is short so a later identical snapshot still gets to expire seat
+    // holds and re-run the heal checks below.
+    final signature = jsonEncode(snap);
+    final now = DateTime.now();
+    final lastAt = _lastSnapshotAppliedAt;
+    if (signature == _lastSnapshotSignature &&
+        lastAt != null &&
+        now.difference(lastAt) < _snapshotDedupeWindow) {
+      devLog('[SEAT] snapshot identical — skip');
+      return;
+    }
+    _lastSnapshotSignature = signature;
+    _lastSnapshotAppliedAt = now;
     final seatsRaw = snap['seats'];
     if (seatsRaw is List) {
       final occupied = seatsRaw
@@ -4558,6 +4588,16 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   Future<void> _startSpeaking(bool shouldOpenMic) async {
+    if (!shouldOpenMic) return _startSpeakingUnguarded(false);
+    _startSpeakingOpenInFlight++;
+    try {
+      await _startSpeakingUnguarded(true);
+    } finally {
+      _startSpeakingOpenInFlight--;
+    }
+  }
+
+  Future<void> _startSpeakingUnguarded(bool shouldOpenMic) async {
     if (ref.read(userProfileProvider).value == null) return;
     devLog(
       '[SEAT] startSpeaking openMic=$shouldOpenMic '
@@ -4697,6 +4737,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       return;
     }
     if (_voiceHealInFlight) return;
+    if (!_isMuted && _startSpeakingOpenInFlight > 0) {
+      // The publish this heal would ask for is already underway; re-entering
+      // _startSpeaking now would only cancel it and start over.
+      debugPrint('[VOICE] skip heal ($reason) — publish already in flight');
+      return;
+    }
     if (_isMuted &&
         _localUnmuteGuardUntil != null &&
         DateTime.now().isBefore(_localUnmuteGuardUntil!)) {
