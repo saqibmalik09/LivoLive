@@ -123,22 +123,60 @@ async function settleGifts({
   }
   const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
   const settled = [];
-  for (const receiverId of targets) {
+  // Prefer one DB round-trip for multi-seat sends (100k-room storms). Falls
+  // back to per-receiver calls when the batch RPC is not deployed yet.
+  if (targets.length > 1) {
     try {
-      const { rows: rows } = await db.giftQuery(
-        `SELECT public.send_gift($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::int, 'gateway') AS r`,
-        [senderId, receiverId, giftId, roomId, qty],
+      const { rows } = await db.giftQuery(
+        `SELECT public.send_gifts_batch($1::uuid, $2::uuid[], $3::uuid, $4::uuid, $5::int, 'gateway') AS r`,
+        [senderId, targets, giftId, roomId, qty],
       );
-      const one = parseJson(rows[0]?.r) || {};
-      settled.push({ receiver_id: receiverId, result: one });
+      const batch = parseJson(rows[0]?.r);
+      const list = Array.isArray(batch?.results)
+        ? batch.results
+        : Array.isArray(batch)
+          ? batch
+          : null;
+      if (list) {
+        for (const row of list) {
+          const receiverId = String(row.receiver_id || row.receiverId || "");
+          const result =
+            row.result && typeof row.result === "object"
+              ? row.result
+              : row.success != null
+                ? row
+                : { success: false, message: "invalid batch row" };
+          settled.push({ receiver_id: receiverId, result });
+        }
+      }
     } catch (err) {
-      settled.push({
-        receiver_id: receiverId,
-        result: {
-          success: false,
-          message: err.message || "send_gift failed",
-        },
-      });
+      if (
+        !/send_gifts_batch|does not exist|function .* does not exist/i.test(
+          String(err.message || ""),
+        )
+      ) {
+        console.warn("[gift_settle] batch failed, falling back:", err.message);
+      }
+    }
+  }
+  if (!settled.length) {
+    for (const receiverId of targets) {
+      try {
+        const { rows: rows } = await db.giftQuery(
+          `SELECT public.send_gift($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::int, 'gateway') AS r`,
+          [senderId, receiverId, giftId, roomId, qty],
+        );
+        const one = parseJson(rows[0]?.r) || {};
+        settled.push({ receiver_id: receiverId, result: one });
+      } catch (err) {
+        settled.push({
+          receiver_id: receiverId,
+          result: {
+            success: false,
+            message: err.message || "send_gift failed",
+          },
+        });
+      }
     }
   }
   const anyOk = settled.some(

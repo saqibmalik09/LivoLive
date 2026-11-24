@@ -536,7 +536,12 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
   void _handleRoomGiftBroadcast(Map<String, dynamic> payload) {
     if (_markBroadcastSeen(payload['event_id'])) return;
 
-    _applySeatGiftDelta(payload['seat_gift_delta']);
+    final totals = payload['seat_gift_totals'];
+    if (totals is Map) {
+      _applySeatGiftTotals(totals);
+    } else {
+      _applySeatGiftDelta(payload['seat_gift_delta']);
+    }
 
     final giftMessages = _rb._giftMessagesFromPayload(payload);
     Map<String, dynamic>? msg = giftMessages.isNotEmpty
@@ -592,8 +597,6 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
     } else if (msg != null && msg['type'] == 'gift') {
       _rb._triggerGiftAnimation(msg);
     }
-
-    _rb._invalidateRoomContributions();
   }
 
   Future<void> _broadcastRoomGift(Map<String, dynamic> payload) async {
@@ -617,15 +620,29 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
 
   void _applySeatGiftDelta(dynamic delta) {
     if (delta is! Map) return;
-    setState(() {
-      delta.forEach((key, value) {
-        final receiverId = key.toString();
-        final amount = (value as num?)?.toInt() ?? 0;
-        if (amount <= 0) return;
-        _rb._seatGiftTotals[receiverId] =
-            (_rb._seatGiftTotals[receiverId] ?? 0) + amount;
-      });
+    var changed = false;
+    delta.forEach((key, value) {
+      final receiverId = key.toString();
+      final amount = (value as num?)?.toInt() ?? 0;
+      if (amount <= 0) return;
+      _rb._seatGiftTotals[receiverId] =
+          (_rb._seatGiftTotals[receiverId] ?? 0) + amount;
+      changed = true;
     });
+    if (changed && mounted) setState(() {});
+  }
+
+  void _applySeatGiftTotals(Map totals) {
+    var changed = false;
+    totals.forEach((key, value) {
+      final receiverId = key.toString();
+      final amount = (value as num?)?.toInt() ?? 0;
+      if (amount < 0) return;
+      if (_rb._seatGiftTotals[receiverId] == amount) return;
+      _rb._seatGiftTotals[receiverId] = amount;
+      changed = true;
+    });
+    if (changed && mounted) setState(() {});
   }
 
   void _handleRoomKickBroadcast(Map<String, dynamic> payload) {
@@ -991,6 +1008,17 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
     }
 
     if (_rb._tryAppendChatMessage(newMessage) && type == 'gift') {
+      // Socket room_gift already played FX. Re-triggering from postgres
+      // chat inserts made gifts replay late in busy rooms.
+      final batchId = metadata is Map
+          ? metadata['animation_batch_id']?.toString() ?? ''
+          : '';
+      if (batchId.isNotEmpty && _rb._giftFlightController.hasPlayed(batchId)) {
+        return;
+      }
+      if (batchId.isNotEmpty) {
+        _rb._seenBroadcastEventIds.add('gift_$batchId');
+      }
       _rb._triggerGiftAnimation(newMessage);
     }
   }

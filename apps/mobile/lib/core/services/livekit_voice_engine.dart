@@ -84,6 +84,12 @@ class LiveKitVoiceEngine implements VoiceEngine {
   Timer? _deviceChangeDebounce;
   String _lastDeviceSignature = '';
 
+  /// Last known headset / Bluetooth / wired presence. Unmute + audio-session
+  /// flips often return an empty device list for a beat; treating that as
+  /// "no headset" forced the loudspeaker and left hands-free silent.
+  bool _headsetPresent = false;
+  Timer? _postUnmuteRouteRetry;
+
   void _startDeviceChangeWatch() {
     if (_deviceChangeSub != null) return;
     try {
@@ -91,14 +97,14 @@ class LiveKitVoiceEngine implements VoiceEngine {
         (devices) {
           // Only react when the set of OUTPUTS actually changed; the stream
           // also fires for microphone changes, which must not re-route audio.
-          final signature = devices
+          final outputs = devices
               .where((d) => d.kind == 'audiooutput')
-              .map((d) => d.label)
-              .toList()
-            ..sort();
+              .toList(growable: false);
+          final signature = outputs.map((d) => d.label).toList()..sort();
           final joined = signature.join('|');
           if (joined == _lastDeviceSignature) return;
           _lastDeviceSignature = joined;
+          _headsetPresent = outputs.any((d) => _isHeadsetLabel(d.label));
 
           _deviceChangeDebounce?.cancel();
           _deviceChangeDebounce = Timer(
@@ -121,9 +127,12 @@ class LiveKitVoiceEngine implements VoiceEngine {
   void _stopDeviceChangeWatch() {
     _deviceChangeDebounce?.cancel();
     _deviceChangeDebounce = null;
+    _postUnmuteRouteRetry?.cancel();
+    _postUnmuteRouteRetry = null;
     _deviceChangeSub?.cancel();
     _deviceChangeSub = null;
     _lastDeviceSignature = '';
+    _headsetPresent = false;
   }
 
   /// Identities reported as speaking on the previous event, so we can send an
@@ -432,12 +441,20 @@ class LiveKitVoiceEngine implements VoiceEngine {
         // this, mute and unmute leave the session alone (see below).
         await _applyAudioSessionFor(publishing: true);
         await _reassertSpeakerRoute();
+        // Mode switch briefly drops headset from the enumerated list; re-pin
+        // after AudioSwitch settles so hands-free keeps the route.
+        _postUnmuteRouteRetry?.cancel();
+        _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 350), () {
+          unawaited(_reassertSpeakerRoute());
+        });
+      } else if (enabled) {
+        // Later unmutes leave the session alone, but still re-pin so a wired /
+        // Bluetooth headset that was present before mute is not left on speaker.
+        await _reassertSpeakerRoute();
       }
-      // Just the microphone. The audio session and the output route were both
-      // settled at connect and are left alone: muting and unmuting used to
-      // trigger a session switch plus four route re-asserts spread over 2.8
-      // seconds, and that churn is what made voice cut in and out and jump
-      // between the speaker and the earpiece every time someone took the mic.
+      // Just the microphone after the route is settled. Avoid flipping the
+      // audio session on every mute/unmute — that churn yanked voice between
+      // speaker and earpiece.
       await _setMicOnLocal(local, enabled);
       // #region agent log
       if (enabled) unawaited(_dbgSampleLocalAudio());
@@ -789,8 +806,15 @@ class LiveKitVoiceEngine implements VoiceEngine {
   /// yank audio out of the user's headphones.
   Future<void> _reassertSpeakerRoute() async {
     try {
-      final labels = await _audioOutputLabels();
-      final headset = labels.any(_isHeadsetLabel);
+      final outputs = await _audioOutputDevices();
+      final labels = outputs.map((d) => d.label).toList(growable: false);
+      final headsetNow = labels.any(_isHeadsetLabel);
+      // Empty enumeration right after unmute must not clear a known headset —
+      // that is what forced loudspeaker and muted hands-free.
+      if (labels.isNotEmpty) {
+        _headsetPresent = headsetNow;
+      }
+      final headset = _headsetPresent || headsetNow;
 
       // AudioSwitch picks the first available device from a preferred list,
       // and only the FORCED list puts the speaker ahead of the earpiece:
@@ -798,42 +822,28 @@ class LiveKitVoiceEngine implements VoiceEngine {
       //   preferred  -> [Bluetooth, Wired, Speakerphone, Earpiece]
       //   neither    -> [Bluetooth, Wired, Earpiece, Speakerphone]
       //
-      // Speaker ON therefore has to force, unconditionally. Making this
-      // conditional on headset detection meant one wrong reading silently
-      // disabled the fix and the room went back to the earpiece — which is
-      // exactly what kept happening. Speaker OFF uses the unforced list,
-      // where a headset still wins and the earpiece is the fallback, so
-      // headphone users have a working route via the speaker toggle.
-      // Force only when there is no headset. Forcing puts Speakerphone first
-      // and would otherwise rip audio out of someone's headphones; unforced
-      // still ranks a headset above the speaker and the earpiece below it.
-      // The flip below is what makes either choice actually take effect.
-      // With a headset connected, do not ask for the loudspeaker at all.
-      //
-      // Passing `_speakerOn` straight through still reached
-      // Native.setAndroidSpeakerphoneOn(true, force: false) — i.e. "speakerphone
-      // on, just don't force it". AudioSwitch honours that the moment it
-      // re-sorts devices, a couple of seconds after capture starts, which is
-      // why audio played through the headset for 2-3 seconds and then jumped
-      // back to the speaker. The user's speaker preference is remembered in
-      // `_speakerOn` and comes back the instant the headset is unplugged.
+      // With a headset connected we must never ask for (or flip through) the
+      // loudspeaker: the old nudge called setSpeakerOutputPreferred(true) first
+      // and yanked playback out of hands-free on every unmute.
       final wantSpeaker = _speakerOn && !headset;
       final force = wantSpeaker;
 
-      // AudioSwitch.setPreferredDeviceList returns immediately when the list
-      // it is handed equals the one already held — verified in its bytecode:
-      //     areEqual -> ifeq -> return
-      // So re-requesting the same routing after unmuting did nothing at all,
-      // and whichever device was picked during the session switch (the
-      // earpiece) stayed selected. Handing it a DIFFERENT list first makes
-      // the real call re-sort the devices and re-select, which is precisely
-      // what toggling the output device by hand does.
-      await lk.AudioManager.instance.setSpeakerOutputPreferred(!wantSpeaker);
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      await lk.AudioManager.instance.setSpeakerOutputPreferred(
-        wantSpeaker,
-        force: force,
-      );
+      if (headset) {
+        await lk.AudioManager.instance.setSpeakerOutputPreferred(
+          false,
+          force: false,
+        );
+        await _selectHeadsetOutput(outputs);
+      } else {
+        // AudioSwitch.setPreferredDeviceList no-ops when the list is unchanged.
+        // Flip once so the real preference re-sorts and re-selects.
+        await lk.AudioManager.instance.setSpeakerOutputPreferred(!wantSpeaker);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await lk.AudioManager.instance.setSpeakerOutputPreferred(
+          wantSpeaker,
+          force: force,
+        );
+      }
       debugPrint(
         '[LK] speaker route: pref=$wantSpeaker (toggle=$_speakerOn) '
         'headset=$headset force=$force devices=$labels',
@@ -843,11 +853,26 @@ class LiveKitVoiceEngine implements VoiceEngine {
     }
   }
 
-  /// Labels of the audio outputs LiveKit currently reports.
-  Future<List<String>> _audioOutputLabels() async {
+  /// Prefer a connected Bluetooth / wired / USB headset on Android.
+  Future<void> _selectHeadsetOutput(List<lk.MediaDevice> outputs) async {
     try {
-      final outputs = await lk.Hardware.instance.audioOutputs();
-      return outputs.map((d) => d.label).toList(growable: false);
+      lk.MediaDevice? headset;
+      for (final d in outputs) {
+        if (_isHeadsetLabel(d.label)) {
+          headset = d;
+          break;
+        }
+      }
+      if (headset == null) return;
+      await lk.Hardware.instance.selectAudioOutput(headset);
+    } catch (e) {
+      debugPrint('[LK] select headset output failed: $e');
+    }
+  }
+
+  Future<List<lk.MediaDevice>> _audioOutputDevices() async {
+    try {
+      return await lk.Hardware.instance.audioOutputs();
     } catch (e) {
       debugPrint('[LK] audioOutputs lookup failed: $e');
       return const [];
@@ -860,7 +885,10 @@ class LiveKitVoiceEngine implements VoiceEngine {
         l.contains('headset') ||
         l.contains('headphone') ||
         l.contains('wired') ||
-        l.contains('usb');
+        l.contains('usb') ||
+        l.contains('a2dp') ||
+        l.contains('sco') ||
+        l.contains('ble');
   }
 
 

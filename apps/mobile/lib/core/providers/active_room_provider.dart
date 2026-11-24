@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sk_live/core/providers/wallet_coins_provider.dart';
 import 'package:sk_live/core/services/room_floating_bubble_service.dart';
 import 'package:sk_live/core/services/room_media_keep_alive.dart';
 import 'package:sk_live/core/services/room_minimized_keepalive.dart';
@@ -40,6 +41,7 @@ void clearActiveRoomState(dynamic ref) {
   ref.read(minimizedRoomProvider.notifier).state = null;
   ref.read(currentLiveRoomIdProvider.notifier).state = null;
   ref.read(roomSystemBubbleVisibleProvider.notifier).state = false;
+  ref.read(walletCoinsOverrideProvider.notifier).state = null;
   RoomFloatingBubbleService.cacheSession(null);
 
   RoomMediaKeepAlive.disposeAll();

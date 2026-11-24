@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sk_live/core/widgets/app_network_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
+import 'package:sk_live/core/providers/wallet_coins_provider.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 
 import 'package:sk_live/core/providers/shop_provider.dart';
@@ -165,7 +167,8 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(giftCategoriesProvider);
     final userProfile = ref.watch(userProfileProvider).value;
-    final coins = (userProfile?['coins'] as num?)?.toInt() ?? 0;
+    syncWalletCoinsOverrideFromProfile(ref, userProfile);
+    final coins = resolveWalletCoins(ref, userProfile);
     final allMembers = _getAllMembers();
 
     return Container(
@@ -324,16 +327,22 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
       },
       selectedGiftId: _selectedGift?['id'] as String?,
       eventMarkers: eventMarkers,
-      onGiftSelected: (gift) => setState(
-        () => _selectedGift = {
-          'id': gift.id,
-          'name': gift.name,
-          'price_coins': gift.priceCoins,
-          'icon_url': gift.imageUrl,
-          'svga_url': gift.svgaUrl,
-          'is_full_screen': gift.isFullScreen,
-        },
-      ),
+      onGiftSelected: (gift) {
+        setState(
+          () => _selectedGift = {
+            'id': gift.id,
+            'name': gift.name,
+            'price_coins': gift.priceCoins,
+            'icon_url': gift.imageUrl,
+            'svga_url': gift.svgaUrl,
+            'is_full_screen': gift.isFullScreen,
+          },
+        );
+        final svga = gift.svgaUrl?.trim() ?? '';
+        if (gift.isFullScreen && svga.isNotEmpty) {
+          unawaited(SvgaCache.preload([svga]));
+        }
+      },
     );
   }
 
@@ -565,24 +574,32 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
         targets.length;
 
     final userProfile = ref.read(userProfileProvider).value;
-    final currentCoins = (userProfile?['coins'] as num?)?.toInt() ?? 0;
+    final currentCoins = resolveWalletCoins(ref, userProfile);
 
     if (currentCoins < totalCost) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
         SnackBar(
-          content: Text(context.l10n.chat_insufficientBalance),
+          content: Text(context.l10n.room_insufficientCoins),
           backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 2),
         ),
       );
       return;
     }
 
+    // Cut balance instantly (combo + normal) — never wait on gateway/RPC.
+    applyOptimisticCoinSpend(ref, totalCost);
     setState(() => _isSending = true);
 
     try {
       final supabase = Supabase.instance.client;
       final myUser = ref.read(userProfileProvider).value;
-      if (myUser == null) return;
+      if (myUser == null) {
+        refundOptimisticCoinSpend(ref, totalCost);
+        return;
+      }
 
       bool anySuccess = false;
       int newWealthLevel = userProfile?['wealth_level'] ?? 1;
@@ -793,7 +810,12 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
 
       if (firstLuckyWin != null) {
         ref.invalidate(systemNotificationsProvider);
-        ref.invalidate(userProfileProvider);
+      }
+
+      // Refund optimistic spend for targets that failed (keep spent amount).
+      final failedCost = totalCost - totalSpentSuccess;
+      if (failedCost > 0) {
+        refundOptimisticCoinSpend(ref, failedCost);
       }
 
       if (mounted && _isAllSelected && outcomes.any((o) => o.success)) {
@@ -808,15 +830,18 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
       }
 
       if (totalSpentSuccess > 0) {
-        await TaskTrackerService.trackAction(
-          'spend_coins',
-          amount: totalSpentSuccess,
+        unawaited(
+          TaskTrackerService.trackAction(
+            'spend_coins',
+            amount: totalSpentSuccess,
+          ),
         );
-        await TaskTrackerService.trackAction('newbie_send_gift');
+        unawaited(TaskTrackerService.trackAction('newbie_send_gift'));
       }
 
       if (anySuccess) {
-        ref.invalidate(userProfileProvider);
+        // Do NOT invalidate userProfile — that flashes loading for the whole
+        // wallet UI. Optimistic coins + users realtime stream keep the pill honest.
 
         if (_selectedGift != null && successfulTargets.isNotEmpty) {
           if (_isAllSelected) {
@@ -884,6 +909,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
       }
     } catch (e) {
       debugPrint('Send Gift Error: $e');
+      refundOptimisticCoinSpend(ref, totalCost);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

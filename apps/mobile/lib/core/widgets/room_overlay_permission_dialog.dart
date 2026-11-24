@@ -5,6 +5,8 @@ class RoomOverlayPermissionDialog {
   RoomOverlayPermissionDialog._();
 
   static Future<bool> showIfNeeded(BuildContext context) async {
+    // System overlay bubble is retired — in-app minimize only.
+    if (!RoomFloatingBubbleService.showsSystemOverlayBubble) return false;
     if (!RoomFloatingBubbleService.isSupported) return false;
     if (await RoomFloatingBubbleService.hasPermission()) return true;
     if (!context.mounted) return false;

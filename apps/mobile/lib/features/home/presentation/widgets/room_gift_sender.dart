@@ -338,9 +338,12 @@ Future<List<RoomGiftSendOutcome>> sendRoomGiftsMulti({
   bool persistMessage = false,
 }) async {
   if (targetIds.isEmpty) return const [];
-  return Future.wait(
-    targetIds.map(
-      (targetId) => sendRoomGift(
+  // Serialize fallback RPCs — parallel Future.wait stampeded the gift DB pool
+  // under multi-seat / retry storms while Postgres still locked the sender.
+  final out = <RoomGiftSendOutcome>[];
+  for (final targetId in targetIds) {
+    out.add(
+      await sendRoomGift(
         supabase: supabase,
         roomId: roomId,
         myUser: myUser,
@@ -351,8 +354,9 @@ Future<List<RoomGiftSendOutcome>> sendRoomGiftsMulti({
         allMembers: allMembers,
         persistMessage: persistMessage,
       ),
-    ),
-  );
+    );
+  }
+  return out;
 }
 
 Future<List<RoomGiftSendOutcome>> sendRoomGiftsViaGateway({

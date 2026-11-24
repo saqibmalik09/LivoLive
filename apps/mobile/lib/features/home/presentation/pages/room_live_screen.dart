@@ -36,12 +36,12 @@ import 'package:sk_live/core/providers/profile_provider.dart';
 import 'package:sk_live/core/providers/seat_wear_cache.dart';
 import 'package:sk_live/core/providers/inventory_provider.dart';
 import 'package:sk_live/core/providers/active_room_provider.dart';
+import 'package:sk_live/core/providers/wallet_coins_provider.dart';
 import 'package:sk_live/core/providers/home_provider.dart';
 import 'package:sk_live/core/providers/staff_provider.dart';
 import 'package:sk_live/features/home/services/room_chat_image_service.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 import 'package:sk_live/core/widgets/room_background_media.dart';
-import 'package:sk_live/core/widgets/room_overlay_permission_dialog.dart';
 import 'package:sk_live/core/services/background_service.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/services/room_media_keep_alive.dart';
@@ -476,7 +476,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   bool _kickHandled = false;
   bool _roomSessionReleased = false;
   bool _resumingMinimizedSession = false;
-  bool _bubblePermissionPrompted = false;
 
   int _seatSessionGeneration = 0;
   bool _zegoLoginReady = false;
@@ -580,10 +579,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       RoomMicEmojiOverlayController();
   bool _fullScreenGiftShowing = false;
   OverlayEntry? _fullScreenGiftOverlayEntry;
+  /// Bounded FS gift queue — drop oldest under storm so busy rooms stay live.
+  final ListQueue<String> _fullScreenGiftQueue = ListQueue<String>();
+  static const int _maxFullScreenGiftQueued = 3;
   RepeatGiftSession? _repeatGiftSession;
   bool _isRepeatSending = false;
   bool _repeatGiftDraining = false;
-  int _repeatGiftReservedCost = 0;
+  /// Optimistic coins for the repeat-gift button. Deducted on each tap so a
+  /// stale profile stream cannot keep accepting taps past the real balance.
+  /// `-1` means "not armed yet — take the next profile read".
+  int _giftCoinsLocal = -1;
+  DateTime? _lastInsufficientGiftToastAt;
   final ListQueue<_PendingRepeatGift> _repeatGiftQueue =
       ListQueue<_PendingRepeatGift>();
   DateTime? _lastRepeatGiftAt;
@@ -912,7 +918,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       _startActivityTimer();
       unawaited(_fetchRoomLevelStats());
       ref.read(recentRoomsProvider.notifier).addRoom(widget.room);
-      unawaited(_promptBubblePermissionOnce());
       unawaited(_ensureMicPermissionAtEntry());
       unawaited(_ensureRoomShortIdLoaded());
     });
@@ -932,17 +937,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       'LIVO: Room is active',
       'You are in ${_roomData!['title']} — tap to return',
     );
-  }
-
-  Future<void> _promptBubblePermissionOnce() async {
-    if (_bubblePermissionPrompted || !mounted) return;
-    if (!RoomFloatingBubbleService.isSupported) return;
-    if (await RoomFloatingBubbleService.hasPermission()) return;
-
-    _bubblePermissionPrompted = true;
-    await Future<void>.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
-    await RoomOverlayPermissionDialog.showIfNeeded(context);
   }
 
   @override
@@ -7605,9 +7599,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   void _invalidateRoomContributions() {
-    final roomId = widget.room['id'].toString();
-    ref.invalidate(roomContributionRankingsProvider((roomId, 'Daily')));
-    ref.invalidate(roomContributionRankingsProvider((roomId, 'Weekly')));
+    // Intentionally empty on the gift hot path. Refetching contribution
+    // rankings on every gift was 2 RPCs + users.inFilter per send and made
+    // busy rooms feel like every tap waited on loading. Rankings refresh when
+    // the contribution sheet opens.
   }
 
   Widget _buildOnlineAvatar(String? url, {double size = 25}) {
@@ -9466,11 +9461,16 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _giftFlightController.clearAll();
     _micEmojiOverlayController.clearAll();
     _seenFullScreenGiftBatchIds.clear();
+    _fullScreenGiftQueue.clear();
     if (_fullScreenGiftOverlayEntry?.mounted == true) {
       _fullScreenGiftOverlayEntry!.remove();
     }
     _fullScreenGiftOverlayEntry = null;
     _fullScreenGiftShowing = false;
+    _activeLuckyFanbis.clear();
+    _activeLuckyMultipliers.clear();
+    _repeatGiftQueue.clear();
+    _repeatGiftDraining = false;
   }
 
   bool _truthyBool(dynamic value) {
@@ -9614,6 +9614,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   void _armRepeatGiftSession(RepeatGiftSession session) {
     _repeatGiftHideTimer?.cancel();
+    // Fresh session: re-baseline local coins from the profile on the next tap.
+    if (_repeatGiftSession == null) {
+      _giftCoinsLocal = -1;
+    }
     setState(() => _repeatGiftSession = session);
     _repeatGiftHideTimer = Timer(_repeatGiftVisibleFor, () {
       if (!mounted) return;
@@ -9625,12 +9629,59 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   void _clearRepeatGiftSession() {
     _repeatGiftHideTimer?.cancel();
     _repeatGiftHideTimer = null;
+    _giftCoinsLocal = -1;
     if (_repeatGiftSession != null && mounted) {
       setState(() => _repeatGiftSession = null);
     } else {
       _repeatGiftSession = null;
     }
     _armBonusPattiHide();
+  }
+
+  int _giftCoinsAvailable(Map<String, dynamic> myUser) {
+    syncWalletCoinsOverrideFromProfile(ref, myUser);
+    final override = ref.read(walletCoinsOverrideProvider);
+    final profile = override ?? (myUser['coins'] as num?)?.toInt() ?? 0;
+    if (_giftCoinsLocal < 0) {
+      _giftCoinsLocal = profile;
+    } else if (profile < _giftCoinsLocal) {
+      // Stream / override caught up with a spend (or a lower server truth).
+      _giftCoinsLocal = profile;
+    } else if (!_repeatGiftDraining &&
+        _repeatGiftQueue.isEmpty &&
+        profile > _giftCoinsLocal) {
+      // Idle + higher profile = top-up / refresh.
+      _giftCoinsLocal = profile;
+    }
+    return _giftCoinsLocal;
+  }
+
+  void _showInsufficientGiftToastOnce() {
+    final now = DateTime.now();
+    final last = _lastInsufficientGiftToastAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastInsufficientGiftToastAt = now;
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(context.l10n.room_insufficientCoins),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  static bool _isInsufficientGiftError(String? message) {
+    if (message == null || message.isEmpty) return false;
+    final l = message.toLowerCase();
+    return l.contains('insufficient') ||
+        l.contains('not enough') ||
+        l.contains('balance') ||
+        l.contains('no coin');
   }
 
   bool _isSameRepeatGift(RepeatGiftSession a, RepeatGiftSession b) {
@@ -9697,15 +9748,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (targets.isEmpty) return;
 
     final unitCost = _repeatGiftUnitCost(session);
-    final coins = (myUser['coins'] as num?)?.toInt() ?? 0;
-    if (coins < _repeatGiftReservedCost + unitCost) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Insufficient balance!'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+    final coins = _giftCoinsAvailable(myUser);
+    if (coins < unitCost) {
+      _showInsufficientGiftToastOnce();
+      // Stop the floating repeat button so holding/tapping cannot spam toasts.
+      _clearRepeatGiftSession();
       return;
     }
 
@@ -9717,7 +9764,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
 
     final animationBatchId = const Uuid().v4();
-    _repeatGiftReservedCost += unitCost;
+    // Optimistic deduct so the next tap sees the spend before the profile stream.
+    _giftCoinsLocal = coins - unitCost;
+    ref.read(walletCoinsOverrideProvider.notifier).state = _giftCoinsLocal;
     _repeatGiftQueue.add(
       _PendingRepeatGift(
         animationBatchId: animationBatchId,
@@ -9755,19 +9804,25 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       late Future<void> f;
       f = () async {
         try {
-          final ok = await _sendOneRepeatGift(
+          final result = await _sendOneRepeatGiftDetailed(
             pending.session,
             animationBatchId: pending.animationBatchId,
-            showErrorSnack: false,
           );
-          if (!ok) {
+          if (!result.ok) {
+            // Refund optimistic spend; the coins never left the wallet.
+            _giftCoinsLocal =
+                (_giftCoinsLocal < 0 ? 0 : _giftCoinsLocal) + pending.unitCost;
+            ref.read(walletCoinsOverrideProvider.notifier).state =
+                _giftCoinsLocal;
             debugPrint(
               'Repeat gift RPC failed for ${pending.animationBatchId}',
             );
+            if (result.insufficient) {
+              _showInsufficientGiftToastOnce();
+              _clearRepeatGiftQueueAndSession();
+            }
           }
         } finally {
-          _repeatGiftReservedCost = (_repeatGiftReservedCost - pending.unitCost)
-              .clamp(0, 1 << 30);
           inFlight.remove(f);
         }
       }();
@@ -9795,16 +9850,28 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _isRepeatSending = false;
   }
 
-  Future<bool> _sendOneRepeatGift(
+  void _clearRepeatGiftQueueAndSession() {
+    // Drop queued taps that have not launched yet (optimistic spend refunded).
+    while (_repeatGiftQueue.isNotEmpty) {
+      final pending = _repeatGiftQueue.removeFirst();
+      _giftCoinsLocal =
+          (_giftCoinsLocal < 0 ? 0 : _giftCoinsLocal) + pending.unitCost;
+    }
+    if (_giftCoinsLocal >= 0) {
+      ref.read(walletCoinsOverrideProvider.notifier).state = _giftCoinsLocal;
+    }
+    _clearRepeatGiftSession();
+  }
+
+  Future<({bool ok, bool insufficient})> _sendOneRepeatGiftDetailed(
     RepeatGiftSession session, {
     required String animationBatchId,
-    bool showErrorSnack = true,
   }) async {
     final myUser = ref.read(userProfileProvider).value;
-    if (myUser == null) return false;
+    if (myUser == null) return (ok: false, insufficient: false);
 
     final targets = session.targetIds;
-    if (targets.isEmpty) return false;
+    if (targets.isEmpty) return (ok: false, insufficient: false);
 
     final members = _getGiftTargetMembers();
 
@@ -9838,28 +9905,39 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       final successfulTargets = <String>[];
       var anyLuckyWin = false;
       var totalSpent = 0;
+      var insufficient = false;
       for (var i = 0; i < targets.length; i++) {
-        if (i >= outcomes.length || !outcomes[i].success) continue;
+        if (i >= outcomes.length) continue;
+        final o = outcomes[i];
+        if (_isInsufficientGiftError(o.errorMessage)) {
+          insufficient = true;
+        }
+        if (!o.success) continue;
         successfulTargets.add(targets[i]);
         totalSpent += session.priceCoins * session.quantity;
-        if (outcomes[i].luckyWin) anyLuckyWin = true;
+        if (o.luckyWin) anyLuckyWin = true;
       }
 
       if (successfulTargets.isEmpty) {
-        if (showErrorSnack && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to send gift'),
-              backgroundColor: Colors.redAccent,
-            ),
-          );
-        }
-        return false;
+        return (ok: false, insufficient: insufficient);
+      }
+
+      // Partial success (some targets paid): refund the unpaid share of the
+      // optimistic full-unit deduct so the local balance stays honest.
+      final expectedSpend = _repeatGiftUnitCost(session);
+      final unpaid = expectedSpend - totalSpent;
+      if (unpaid > 0) {
+        _giftCoinsLocal = (_giftCoinsLocal < 0 ? 0 : _giftCoinsLocal) + unpaid;
+        ref.read(walletCoinsOverrideProvider.notifier).state = _giftCoinsLocal;
+      }
+      if (insufficient) {
+        // Do not keep hammering once the server says the wallet is empty.
+        _showInsufficientGiftToastOnce();
+        _clearRepeatGiftQueueAndSession();
       }
 
       if (anyLuckyWin) {
         ref.invalidate(systemNotificationsProvider);
-        ref.invalidate(userProfileProvider);
       }
 
       await _broadcastRepeatGiftOutcomes(
@@ -9874,27 +9952,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       );
 
       if (totalSpent > 0) {
-        await TaskTrackerService.trackAction('spend_coins', amount: totalSpent);
-        await TaskTrackerService.trackAction('newbie_send_gift');
+        unawaited(
+          TaskTrackerService.trackAction('spend_coins', amount: totalSpent),
+        );
+        unawaited(TaskTrackerService.trackAction('newbie_send_gift'));
       }
-      ref.invalidate(userProfileProvider);
+      // Keep optimistic wallet; users realtime stream settles truth without
+      // flashing loading via invalidate(userProfileProvider).
 
       final current = _repeatGiftSession;
       if (mounted && current != null && _isSameRepeatGift(current, session)) {
         _armRepeatGiftSession(current);
       }
-      return true;
+      return (ok: true, insufficient: insufficient);
     } catch (e) {
       debugPrint('Repeat gift error: $e');
-      if (showErrorSnack && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to send gift'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-      return false;
+      final msg = e.toString();
+      return (ok: false, insufficient: _isInsufficientGiftError(msg));
     }
   }
 
@@ -9967,7 +10041,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       svgaUrl: svgaUrl,
       playFullScreenSvga: playFullScreenSvga,
     );
-    _invalidateRoomContributions();
 
     if (isBigGiftPatti) {
       final profile = ref.read(userProfileProvider).value;
@@ -10672,10 +10745,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   void _showFullScreenGift(String svgaUrl) {
-    if (_fullScreenGiftShowing) return;
+    final url = svgaUrl.trim();
+    if (url.isEmpty) return;
     // This overlay plays on top of everything, including an open game sheet;
     // skip it while a game is open so the game keeps the CPU / GPU (S6).
     if (ref.read(gameOverlayOpenProvider) > 0) return;
+    if (_fullScreenGiftShowing) {
+      while (_fullScreenGiftQueue.length >= _maxFullScreenGiftQueued) {
+        _fullScreenGiftQueue.removeFirst();
+      }
+      _fullScreenGiftQueue.addLast(url);
+      return;
+    }
+    _playFullScreenGiftNow(url);
+  }
+
+  void _playFullScreenGiftNow(String svgaUrl) {
+    if (!mounted) return;
     _fullScreenGiftShowing = true;
     debugPrint('Showing full screen gift: $svgaUrl');
     late OverlayEntry entry;
@@ -10693,9 +10779,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                     fit: BoxFit.cover,
                     playbackSpeed: 1.5,
                     onFinished: () {
-                      _fullScreenGiftShowing = false;
-                      _fullScreenGiftOverlayEntry = null;
-                      if (entry.mounted) entry.remove();
+                      _onFullScreenGiftFinished(entry);
                     },
                   ),
                 ),
@@ -10709,12 +10793,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     Overlay.of(context).insert(entry);
 
     Future.delayed(const Duration(seconds: 15), () {
-      _fullScreenGiftShowing = false;
-      _fullScreenGiftOverlayEntry = null;
-      if (entry.mounted) {
-        entry.remove();
+      if (_fullScreenGiftOverlayEntry == entry) {
+        _onFullScreenGiftFinished(entry);
       }
     });
+  }
+
+  void _onFullScreenGiftFinished(OverlayEntry entry) {
+    if (_fullScreenGiftOverlayEntry == entry) {
+      _fullScreenGiftOverlayEntry = null;
+      _fullScreenGiftShowing = false;
+    }
+    if (entry.mounted) entry.remove();
+    if (!mounted) return;
+    if (_fullScreenGiftShowing) return;
+    if (_fullScreenGiftQueue.isEmpty) return;
+    final next = _fullScreenGiftQueue.removeFirst();
+    _playFullScreenGiftNow(next);
   }
 
   Widget _buildChatArea() {

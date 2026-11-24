@@ -83,9 +83,12 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   static const int _waveStaggerMs = 90;
 
   /// Ceiling on icons in flight from everybody at once. Past this the frame
-  /// cost shows up on a cheap phone, and nobody can tell sixty icons from two
-  /// hundred.
-  static const int _maxActiveFlights = 60;
+  /// cost shows up on a cheap phone, and nobody can tell forty icons from two
+  /// hundred — especially with 100k-room gift storms.
+  static const int _maxActiveFlights = 40;
+
+  /// Soft cap on cached gift icon providers for a long room session.
+  static const int _maxImageCacheEntries = 32;
 
   final Map<String, List<_RunnableBatch>> _chainQueues = {};
   final Map<String, Timer> _chainTimers = {};
@@ -144,20 +147,31 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   void enqueue(GiftFlightRequest request) {
     if (request.targetIds.isEmpty) return;
 
-    if (request.dedupeKey != null && request.dedupeKey!.isNotEmpty) {
-      if (_playedDedupeKeys.contains(request.dedupeKey)) return;
-      markPlayed(request.dedupeKey!);
+    if (request.dedupeKey != null &&
+        request.dedupeKey!.isNotEmpty &&
+        _playedDedupeKeys.contains(request.dedupeKey)) {
+      return;
     }
 
     if (request.isFullScreen && request.svgaUrl.isNotEmpty) {
+      // Fire FS immediately when possible — the old 480ms delay stacked with
+      // SVGA decode and made "sent" feel late even for cached assets.
       final svga = request.svgaUrl;
-      Future<void>.delayed(const Duration(milliseconds: 480), () {
+      scheduleMicrotask(() {
         if (!mounted) return;
         widget.onFullScreenSvga?.call(svga);
       });
     }
 
-    if (request.imageUrl.isEmpty) return;
+    if (request.imageUrl.isEmpty) {
+      // Still mark after a successful FS enqueue so peers do not double-play.
+      if (request.dedupeKey != null &&
+          request.dedupeKey!.isNotEmpty &&
+          request.isFullScreen) {
+        markPlayed(request.dedupeKey!);
+      }
+      return;
+    }
 
     final provider = _providerFor(request.imageUrl);
     precacheImage(provider, context).catchError((_) {});
@@ -193,6 +207,11 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       }
 
       if (waves.isEmpty) return;
+      // Mark only once waves are actually queued — if we marked earlier and
+      // then dropped at the active-flight cap, the batch never replayed.
+      if (request.dedupeKey != null && request.dedupeKey!.isNotEmpty) {
+        markPlayed(request.dedupeKey!);
+      }
       _chainQueues.putIfAbsent(chainId, () => []).addAll(waves);
       _pumpChain(chainId);
     });
@@ -282,7 +301,14 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   }
 
   ImageProvider _providerFor(String url) {
-    return _imageCache.putIfAbsent(url, () => CachedNetworkImageProvider(url));
+    final existing = _imageCache[url];
+    if (existing != null) return existing;
+    if (_imageCache.length >= _maxImageCacheEntries) {
+      _imageCache.remove(_imageCache.keys.first);
+    }
+    final provider = CachedNetworkImageProvider(url);
+    _imageCache[url] = provider;
+    return provider;
   }
 
   @override

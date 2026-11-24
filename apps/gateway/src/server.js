@@ -37,6 +37,12 @@ const { installGracefulShutdown: installGracefulShutdown } = require("./graceful
 const giftSendQueue = createKeyedQueue({
   maxPending: Number(process.env.GIFT_SEND_MAX_PENDING) || 50,
 });
+/** Cross-sender cap so a storm of gifters cannot exhaust the gift DB pool. */
+const GIFT_GLOBAL_INFLIGHT_MAX = Math.max(
+  8,
+  Number(process.env.GIFT_GLOBAL_INFLIGHT_MAX) || 64,
+);
+let giftGlobalInflight = 0;
 const PORT = Number(process.env.PORT || 3e3);
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -2442,143 +2448,9 @@ io.on("connection", (socket) => {
         settled_on_gateway: payload.settled_on_gateway === true,
         sent_at: new Date().toISOString(),
       };
-      const gatewayWins = [];
-      try {
-        const rolls = luckyEngine.extractGatewayRolls(
-          payload,
-          socket.data.userId,
-        );
-        const byVariant = new Map();
-        for (const rollReq of rolls) {
-          const key = rollReq.variant === "lucky_pro" ? "lucky_pro" : "lucky";
-          if (!byVariant.has(key)) byVariant.set(key, []);
-          byVariant.get(key).push(rollReq);
-        }
-        for (const group of byVariant.values()) {
-          const win = await luckyEngine.rollBatch(
-            pubClient,
-            group.map((rollReq) => ({
-              variant: rollReq.variant,
-              senderId: rollReq.senderId || socket.data.userId,
-              receiverId: rollReq.receiverId,
-              giftId: rollReq.giftId,
-              giftLogId: rollReq.giftLogId,
-              totalCost: rollReq.totalCost,
-              unitPrice: rollReq.unitPrice,
-              quantity: rollReq.quantity,
-            })),
-          );
-          if (!win?.bonus_won) continue;
-          gatewayWins.push(win);
-          shutdown.track(luckyEngine.creditOrEnqueue(pubClient, win)).catch((err) => {
-            console.warn("[lucky_engine] credit enqueue:", err.message);
-          });
-          const patchMsg = (msg) => {
-            if (!msg || typeof msg !== "object") return msg;
-            const meta =
-              msg.metadata && typeof msg.metadata === "object"
-                ? msg.metadata
-                : {};
-            if (String(meta.gift_log_id || "") !== String(win.gift_log_id)) {
-              return msg;
-            }
-            const contentBonus =
-              win.variant === "lucky_pro"
-                ? ` - You won ${win.bonus_coins} lucky pro bonus!`
-                : ` - You won ${win.bonus_coins} lucky bonus!`;
-            return {
-              ...msg,
-              content:
-                typeof msg.content === "string" &&
-                !String(msg.content).includes("You won")
-                  ? `${msg.content}${contentBonus}`
-                  : msg.content,
-              metadata: luckyEngine.applyWinToMessageMeta(meta, win),
-            };
-          };
-          if (data.message) data.message = patchMsg(data.message);
-          if (Array.isArray(data.messages)) {
-            data.messages = data.messages.map(patchMsg);
-          }
-          const senderProfile = await resolveLuckySenderProfile({
-            data: data,
-            win: win,
-            socket: socket,
-          });
-          const winPayload = {
-            event_id: `lucky_win_${win.gift_log_id}`,
-            gift_log_id: win.gift_log_id,
-            room_id: roomId,
-            user_id: win.sender_id,
-            receiver_id: win.receiver_id,
-            gift_id: win.gift_id,
-            reward_coins: win.bonus_coins,
-            bonus_coins: win.bonus_coins,
-            bonus_multiplier: win.bonus_multiplier,
-            multiplier_tier: `x${win.bonus_multiplier}`,
-            variant: win.variant,
-            bonus_tier: win.bonus_tier,
-            batch_recipients: win.batch_recipients || group.length,
-            batch_spend: win.batch_spend || null,
-            animation_batch_id: data.animation_batch_id,
-            username: senderProfile.username,
-            avatar_url: senderProfile.avatar_url,
-            sender_username: senderProfile.username,
-            sender_avatar: senderProfile.avatar_url,
-            gift_name:
-              senderProfile.gift_name ||
-              (data.message &&
-                data.message.metadata &&
-                data.message.metadata.gift_name) ||
-              null,
-            gift_icon: data.gift_icon || null,
-            created_at: new Date().toISOString(),
-          };
-          socket.emit("lucky:win", {
-            event_id: winPayload.event_id,
-            event: "lucky_win",
-            user_id: socket.data.userId,
-            ts: Date.now(),
-            data: winPayload,
-          });
-          io.to(`room:${roomId}`).emit("lucky:win", {
-            event_id: winPayload.event_id,
-            event: "lucky_win",
-            user_id: socket.data.userId,
-            ts: Date.now(),
-            data: winPayload,
-          });
-          try {
-            emitGlobalWin(
-              {
-                id: winPayload.event_id,
-                event_id: winPayload.event_id,
-                user_id: win.sender_id,
-                username: senderProfile.username,
-                avatar_url: senderProfile.avatar_url,
-                source_label: senderProfile.gift_name || "Lucky Gift",
-                reward_coins: win.bonus_coins,
-                bonus_multiplier: win.bonus_multiplier,
-                multiplier_tier: `x${win.bonus_multiplier}`,
-                variant: win.variant,
-                gift_icon: data.gift_icon || null,
-                room_id: roomId,
-                created_at: winPayload.created_at,
-              },
-              socket.data.userId,
-            );
-          } catch (err) {
-            console.warn("[lucky:win] global emit failed:", err.message);
-          }
-          console.log(
-            `[lucky_engine] win room=${roomId} user=${win.sender_id} ` +
-              `name=${senderProfile.username} coins=${win.bonus_coins} ` +
-              `x${win.bonus_multiplier} variant=${win.variant}`,
-          );
-        }
-      } catch (err) {
-        console.warn("[lucky_engine] roll failed:", err.message);
-      }
+      // Seat totals + room_gift emit FIRST. Lucky rolls used to run before
+      // fanout and turned every gift into hundreds of ms of Redis work while
+      // the whole room waited. Peers must see the gift in ms; wins patch later.
       const deltas = {};
       if (
         payload.seat_gift_delta &&
@@ -2649,18 +2521,6 @@ io.on("connection", (socket) => {
         data,
         socket.data.userId,
       );
-      if (!gatewayWins.length) {
-        try {
-          const win = extractLuckyWinFromGiftMessage(
-            data.message,
-            socket.data.userId,
-            roomId,
-          );
-          if (win) emitGlobalWin(win, socket.data.userId);
-        } catch (err) {
-          console.warn("[global:win] gift extract failed:", err.message);
-        }
-      }
       try {
         const bigGift = extractBigGiftPattiFromGiftMessage(
           data.message,
@@ -2674,13 +2534,140 @@ io.on("connection", (socket) => {
       ackOk(ack, {
         event_id: envelope.event_id,
         seat_gift_totals: seatGiftTotals,
-        lucky_wins: gatewayWins.map((w) => ({
-          gift_log_id: w.gift_log_id,
-          bonus_coins: w.bonus_coins,
-          bonus_multiplier: w.bonus_multiplier,
-          variant: w.variant,
-        })),
+        lucky_wins: [],
       });
+
+      shutdown
+        .track(
+          (async () => {
+            const gatewayWins = [];
+            try {
+              const rolls = luckyEngine.extractGatewayRolls(
+                payload,
+                socket.data.userId,
+              );
+              const byVariant = new Map();
+              for (const rollReq of rolls) {
+                const key =
+                  rollReq.variant === "lucky_pro" ? "lucky_pro" : "lucky";
+                if (!byVariant.has(key)) byVariant.set(key, []);
+                byVariant.get(key).push(rollReq);
+              }
+              for (const group of byVariant.values()) {
+                const win = await luckyEngine.rollBatch(
+                  pubClient,
+                  group.map((rollReq) => ({
+                    variant: rollReq.variant,
+                    senderId: rollReq.senderId || socket.data.userId,
+                    receiverId: rollReq.receiverId,
+                    giftId: rollReq.giftId,
+                    giftLogId: rollReq.giftLogId,
+                    totalCost: rollReq.totalCost,
+                    unitPrice: rollReq.unitPrice,
+                    quantity: rollReq.quantity,
+                  })),
+                );
+                if (!win?.bonus_won) continue;
+                gatewayWins.push(win);
+                shutdown
+                  .track(luckyEngine.creditOrEnqueue(pubClient, win))
+                  .catch((err) => {
+                    console.warn(
+                      "[lucky_engine] credit enqueue:",
+                      err.message,
+                    );
+                  });
+                const senderProfile = await resolveLuckySenderProfile({
+                  data: data,
+                  win: win,
+                  socket: socket,
+                });
+                const winPayload = {
+                  event_id: `lucky_win_${win.gift_log_id}`,
+                  gift_log_id: win.gift_log_id,
+                  room_id: roomId,
+                  user_id: win.sender_id,
+                  receiver_id: win.receiver_id,
+                  gift_id: win.gift_id,
+                  reward_coins: win.bonus_coins,
+                  bonus_coins: win.bonus_coins,
+                  bonus_multiplier: win.bonus_multiplier,
+                  multiplier_tier: `x${win.bonus_multiplier}`,
+                  variant: win.variant,
+                  bonus_tier: win.bonus_tier,
+                  batch_recipients: win.batch_recipients || group.length,
+                  batch_spend: win.batch_spend || null,
+                  animation_batch_id: data.animation_batch_id,
+                  username: senderProfile.username,
+                  avatar_url: senderProfile.avatar_url,
+                  sender_username: senderProfile.username,
+                  sender_avatar: senderProfile.avatar_url,
+                  gift_name:
+                    senderProfile.gift_name ||
+                    (data.message &&
+                      data.message.metadata &&
+                      data.message.metadata.gift_name) ||
+                    null,
+                  gift_icon: data.gift_icon || null,
+                  created_at: new Date().toISOString(),
+                };
+                const luckyEnvelope = {
+                  event_id: winPayload.event_id,
+                  event: "lucky_win",
+                  user_id: socket.data.userId,
+                  ts: Date.now(),
+                  data: winPayload,
+                };
+                socket.emit("lucky:win", luckyEnvelope);
+                io.to(`room:${roomId}`).emit("lucky:win", luckyEnvelope);
+                try {
+                  emitGlobalWin(
+                    {
+                      id: winPayload.event_id,
+                      event_id: winPayload.event_id,
+                      user_id: win.sender_id,
+                      username: senderProfile.username,
+                      avatar_url: senderProfile.avatar_url,
+                      source_label: senderProfile.gift_name || "Lucky Gift",
+                      reward_coins: win.bonus_coins,
+                      bonus_multiplier: win.bonus_multiplier,
+                      multiplier_tier: `x${win.bonus_multiplier}`,
+                      variant: win.variant,
+                      gift_icon: data.gift_icon || null,
+                      room_id: roomId,
+                      created_at: winPayload.created_at,
+                    },
+                    socket.data.userId,
+                  );
+                } catch (err) {
+                  console.warn("[lucky:win] global emit failed:", err.message);
+                }
+                console.log(
+                  `[lucky_engine] win room=${roomId} user=${win.sender_id} ` +
+                    `name=${senderProfile.username} coins=${win.bonus_coins} ` +
+                    `x${win.bonus_multiplier} variant=${win.variant}`,
+                );
+              }
+            } catch (err) {
+              console.warn("[lucky_engine] roll failed:", err.message);
+            }
+            if (!gatewayWins.length) {
+              try {
+                const win = extractLuckyWinFromGiftMessage(
+                  data.message,
+                  socket.data.userId,
+                  roomId,
+                );
+                if (win) emitGlobalWin(win, socket.data.userId);
+              } catch (err) {
+                console.warn("[global:win] gift extract failed:", err.message);
+              }
+            }
+          })(),
+        )
+        .catch((err) => {
+          console.warn("[lucky_engine] post-emit failed:", err.message);
+        });
     } catch (err) {
       ackErr(ack, err.message);
     }
@@ -2818,12 +2805,19 @@ io.on("connection", (socket) => {
     }
   }
   socket.on("gift:send", (payload = {}, ack) => {
+    if (giftGlobalInflight >= GIFT_GLOBAL_INFLIGHT_MAX) {
+      return ackErr(ack, "Too many gifts at once - please wait a moment");
+    }
+    giftGlobalInflight += 1;
     giftSendQueue
       .run(socket.data.userId || socket.id, () => handleGiftSend(payload, ack))
       .catch((err) => {
         if (err && err.code === "QUEUE_FULL") {
           ackErr(ack, "Too many gifts at once - please wait a moment");
         }
+      })
+      .finally(() => {
+        giftGlobalInflight = Math.max(0, giftGlobalInflight - 1);
       });
   });
   socket.on("win:notify", async (payload = {}, ack) => {

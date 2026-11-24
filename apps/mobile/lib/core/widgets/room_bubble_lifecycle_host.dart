@@ -6,14 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/active_room_provider.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
-import 'package:sk_live/core/router/app_router.dart';
 import 'package:sk_live/core/services/orbit_voice_session_service.dart';
 import 'package:sk_live/core/services/room_bubble_native_bridge.dart';
 import 'package:sk_live/core/services/room_exit_coordinator.dart';
 import 'package:sk_live/core/services/room_floating_bubble_service.dart';
 import 'package:sk_live/core/services/room_minimized_keepalive.dart';
 import 'package:sk_live/core/services/room_voice_session_service.dart';
-import 'package:sk_live/core/widgets/room_overlay_permission_dialog.dart';
 import 'package:sk_live/features/home/presentation/pages/room_live_screen.dart';
 
 class RoomBubbleLifecycleHost extends ConsumerStatefulWidget {
@@ -79,6 +77,9 @@ class _RoomBubbleLifecycleHostState
         state == AppLifecycleState.hidden) {
       _appInForeground = false;
       _showDebounce?.cancel();
+      // System overlay bubble is off — do not request overlay permission or
+      // draw over other apps. In-app minimize (MinimizedRoomOverlayHost) stays.
+      if (!RoomFloatingBubbleService.showsSystemOverlayBubble) return;
       _showDebounce = Timer(const Duration(milliseconds: 250), () {
         if (!_appInForeground) {
           unawaited(_maybeShowRoomBubble());
@@ -241,32 +242,9 @@ class _RoomBubbleLifecycleHostState
   Future<void> _onAppResumed() async {
     await _hideRoomBubble(force: true, reason: RoomBubbleHideReason.appResumed);
 
-    if (!_pendingPermissionPrompt || !mounted) return;
-
-    final session = resolveActiveRoomSession(ref);
-    if (session == null) {
-      _pendingPermissionPrompt = false;
-      return;
-    }
-
-    if (await RoomFloatingBubbleService.hasPermission()) {
-      _pendingPermissionPrompt = false;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Floating bubble enabled — press Home to see it'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      return;
-    }
-
+    // Never re-prompt for SYSTEM_ALERT_WINDOW — overlay bubble is retired.
     _pendingPermissionPrompt = false;
-    if (!mounted) return;
-    final navContext = AppRouter.navigatorKey.currentContext;
-    if (navContext == null || !navContext.mounted) return;
-    await RoomOverlayPermissionDialog.showIfNeeded(navContext);
+    if (!RoomFloatingBubbleService.showsSystemOverlayBubble) return;
   }
 
   Future<void> _onAppDetached() async {
