@@ -21,11 +21,69 @@ class AppImageCache {
   /// re-download per image after this ships, then holds far longer.
   static const String _key = 'sk_live_img_v1';
 
+  /// Storage answers `cache-control: no-cache`, which the cache manager reads
+  /// as "expired on arrival": every room entry re-downloaded every avatar,
+  /// frame and badge (and re-ran the server-side resize), and those refetches
+  /// filled the download slots ahead of the frames that were actually new.
+  /// Uploads use fresh timestamped paths, so a day is safe; admin assets
+  /// replaced in place show within a day.
+  static const Duration _minFreshFor = Duration(days: 1);
+
+  /// The library default is 10 for the whole app. A room entry asks for
+  /// seats, frames, badges, gift icons and the background at once.
+  static const int _concurrentFetches = 24;
+
   static final CacheManager manager = CacheManager(
     Config(
       _key,
       maxNrOfCacheObjects: 1500,
       stalePeriod: const Duration(days: 45),
+      fileService: _MinFreshFileService(HttpFileService(), _minFreshFor)
+        ..concurrentFetches = _concurrentFetches,
     ),
   );
+}
+
+class _MinFreshFileService extends FileService {
+  _MinFreshFileService(this._inner, this._minFreshFor);
+
+  final FileService _inner;
+  final Duration _minFreshFor;
+
+  @override
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final response = await _inner.get(url, headers: headers);
+    return _MinFreshResponse(response, DateTime.now().add(_minFreshFor));
+  }
+}
+
+class _MinFreshResponse implements FileServiceResponse {
+  _MinFreshResponse(this._inner, this._floor);
+
+  final FileServiceResponse _inner;
+  final DateTime _floor;
+
+  @override
+  Stream<List<int>> get content => _inner.content;
+
+  @override
+  int? get contentLength => _inner.contentLength;
+
+  @override
+  int get statusCode => _inner.statusCode;
+
+  @override
+  DateTime get validTill {
+    final fromHeaders = _inner.validTill;
+    return fromHeaders.isAfter(_floor) ? fromHeaders : _floor;
+  }
+
+  @override
+  String? get eTag => _inner.eTag;
+
+  @override
+  String get fileExtension => _inner.fileExtension;
 }

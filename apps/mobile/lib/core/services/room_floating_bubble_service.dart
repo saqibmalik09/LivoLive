@@ -44,7 +44,12 @@ class RoomFloatingBubbleService {
   static Completer<bool>? _showLock;
   static int _showGeneration = 0;
 
-  static bool get isSupported => !kIsWeb && Platform.isAndroid;
+  /// System overlay (draw-over-apps) bubble is retired. In-app minimize stays
+  /// via MinimizedRoomOverlayHost — do not flip this without product sign-off.
+  static const bool showsSystemOverlayBubble = false;
+
+  static bool get isSupported =>
+      showsSystemOverlayBubble && !kIsWeb && Platform.isAndroid;
 
   static Map<String, dynamic>? get cachedSession => _cachedSession;
 
@@ -105,25 +110,13 @@ class RoomFloatingBubbleService {
   }
 
   static Future<bool> hasPermission() async {
-    if (!isSupported) return false;
-    return await _platform(
-          FlutterOverlayWindow.isPermissionGranted(),
-          label: 'isPermissionGranted',
-        ) ??
-        false;
+    // Never query / open the system overlay settings screen.
+    return false;
   }
 
   static Future<bool> requestPermission() async {
-    if (!isSupported) return false;
-    try {
-      final granted = await FlutterOverlayWindow.requestPermission().timeout(
-        _platformTimeout,
-      );
-      return granted ?? false;
-    } catch (e) {
-      debugPrint('[RoomBubble] requestPermission failed: $e');
-      return false;
-    }
+    // Hard no — must not open "Display over other apps".
+    return false;
   }
 
   static Future<bool> isShowing() async {
@@ -143,15 +136,6 @@ class RoomFloatingBubbleService {
     }
     return overlayConfirmedActive;
   }
-
-  /// Whether the minimised room may draw a floating bubble OVER other apps.
-  ///
-  /// Turned off: the bubble only ever appeared once the app was backgrounded,
-  /// so it sat on top of whatever the user did next — people could not use
-  /// WhatsApp without a LIVO logo in the way. Minimising now keeps the room
-  /// alive silently and the user returns by reopening the app. Flip this back
-  /// to true to restore the system overlay.
-  static const bool showsSystemOverlayBubble = false;
 
   static Future<bool> showRoomBubble({
     required String roomId,

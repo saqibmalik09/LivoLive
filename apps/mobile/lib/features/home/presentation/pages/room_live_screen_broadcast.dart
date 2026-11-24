@@ -629,7 +629,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
           (_rb._seatGiftTotals[receiverId] ?? 0) + amount;
       changed = true;
     });
-    if (changed && mounted) setState(() {});
+    if (changed) _rb._scheduleSeatGiftRebuild();
   }
 
   void _applySeatGiftTotals(Map totals) {
@@ -642,7 +642,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
       _rb._seatGiftTotals[receiverId] = amount;
       changed = true;
     });
-    if (changed && mounted) setState(() {});
+    if (changed) _rb._scheduleSeatGiftRebuild();
   }
 
   void _handleRoomKickBroadcast(Map<String, dynamic> payload) {

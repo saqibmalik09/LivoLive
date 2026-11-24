@@ -24,6 +24,7 @@ import 'package:sk_live/core/services/room_switch_coordinator.dart';
 import 'package:sk_live/core/router/app_router.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_gift_sheet.dart';
+import 'package:sk_live/features/home/presentation/widgets/room_gift_combo_button.dart';
 import 'package:sk_live/features/home/presentation/widgets/gift_flight_manager.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_details_sheet.dart';
 import 'package:sk_live/features/home/presentation/pages/room_decoration_screen.dart';
@@ -136,15 +137,23 @@ const String _kRoomEntryWarning =
     'Moderators monitor 24/7 — violations will be strictly punished.';
 
 class _PendingRepeatGift {
-  const _PendingRepeatGift({
+  _PendingRepeatGift({
     required this.animationBatchId,
     required this.unitCost,
     required this.session,
   });
 
   final String animationBatchId;
-  final int unitCost;
+
+  /// Optimistic coins held for every tap merged into this send.
+  int unitCost;
   final RepeatGiftSession session;
+
+  /// Taps merged while an earlier send was in flight; settled as one
+  /// gift:send with quantity = session.quantity * taps.
+  int taps = 1;
+
+  int get quantity => session.quantity * taps;
 }
 
 class RoomLiveScreen extends ConsumerStatefulWidget {
@@ -595,14 +604,27 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   DateTime? _lastRepeatGiftAt;
   Timer? _repeatGiftHideTimer;
 
-  /// Repeat taps in flight at once.
+  /// Repeat sends in flight at once.
   ///
-  /// send_gift locks the sender's balance row, so parallel sends from one
-  /// person serialise in Postgres no matter how many are launched — eight only
-  /// meant eight gift-pool connections held while they queued, which is what
-  /// made everyone else's gifts crawl once one person started tapping. Three
-  /// keeps the same throughput for the tapper and leaves the pool for the room.
-  static const int _maxRepeatGiftInFlight = 3;
+  /// send_gift locks the sender's balance row and the gateway queues each
+  /// sender's gift:send, so parallel sends only waited in line. With one in
+  /// flight, taps made meanwhile merge into the next send (see
+  /// [_PendingRepeatGift.taps]): one Postgres transaction and one room
+  /// broadcast per round trip instead of per tap, so the room stops replaying
+  /// a backlog after the tapper stops.
+  static const int _maxRepeatGiftInFlight = 1;
+
+  /// send_gift / gift:notify clamp quantity here.
+  static const int _maxRepeatGiftQuantity = 9999;
+
+  /// Taps in the current combo streak, shown on the combo button.
+  int _repeatComboCount = 0;
+
+  /// Bumped per tap so the combo button restarts its ring without a
+  /// full-screen setState.
+  final ValueNotifier<int> _repeatComboTick = ValueNotifier<int>(0);
+
+  bool _seatGiftRebuildScheduled = false;
 
   /// Ceiling on queued repeat taps. Holding the button must not grow a list
   /// forever; each tap's own animation has already played by then.
@@ -1967,6 +1989,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         ref.read(userProfileProvider).value?['id'] ??
             Supabase.instance.client.auth.currentUser?.id,
       );
+      // One map for the whole list: re-deduping the full list per user was
+      // O(n²) on the UI thread, seconds of freeze when joining a busy room.
+      final onlineById = <String, Map<String, dynamic>>{};
+      for (final user in _onlineUsers) {
+        final id = _normalizePresenceUserId(user['id']);
+        if (id != null) onlineById[id] = user;
+      }
       for (final raw in presenceRaw) {
         if (raw is! Map) continue;
         final user = Map<String, dynamic>.from(raw);
@@ -1976,8 +2005,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         if (_presenceSnapshotBootstrap) {
           _entranceHandledUserIds.add(uid);
         }
-        _onlineUsers = _dedupeOnlineUsersById([..._onlineUsers, user]);
+        if (_normalizePresenceUserId(user['id']) != null) {
+          onlineById[uid] = user;
+        }
       }
+      _onlineUsers = onlineById.values.toList();
       if (mounted) {
         setState(_updateAudienceList);
       }
@@ -2015,7 +2047,20 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (id.isNotEmpty && n > 0) next[id] = n;
     });
     if (!mounted) return;
-    setState(() => _seatGiftTotals = next);
+    _seatGiftTotals = next;
+    _scheduleSeatGiftRebuild();
+  }
+
+  /// Seat gift totals change on every gift in the room; under a gift storm
+  /// that was one full-screen rebuild per socket frame. Coalesce to one per
+  /// rendered frame.
+  void _scheduleSeatGiftRebuild() {
+    if (_seatGiftRebuildScheduled || !mounted) return;
+    _seatGiftRebuildScheduled = true;
+    WidgetsBinding.instance.scheduleFrameCallback((_) {
+      _seatGiftRebuildScheduled = false;
+      if (mounted) setState(() {});
+    });
   }
 
   bool _shouldPreserveLocalSeatOccupant(
@@ -5880,6 +5925,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _gatewaySnapshotDebounceTimer?.cancel();
     _snapshotHoldRecheckTimer?.cancel();
     _repeatGiftHideTimer?.cancel();
+    _repeatComboTick.dispose();
     _bonusPattiHideTimer?.cancel();
     _voiceHealDebounce?.cancel();
 
@@ -6549,15 +6595,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                   },
                 ),
                 ListenableBuilder(
-                  listenable: _chatBarOpen,
+                  listenable: Listenable.merge([
+                    _chatBarOpen,
+                    _repeatComboTick,
+                  ]),
                   builder: (context, _) {
                     if (_chatBarOpen.value || _repeatGiftSession == null) {
                       return const SizedBox.shrink();
                     }
                     return Positioned(
-                      right: 12 + 56 + 10,
+                      left: 0,
+                      right: 0,
                       bottom: MediaQuery.of(context).padding.bottom + 72,
-                      child: _buildRepeatGiftFloatingButton(),
+                      child: Center(child: _buildRepeatGiftFloatingButton()),
                     );
                   },
                 ),
@@ -9590,7 +9640,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         onGiftSent: _onGiftSentOptimistic,
         onGiftBroadcast: _onGiftBroadcastFromSender,
         onRepeatGiftReady: (session) {
-          if (mounted) _armRepeatGiftSession(session);
+          if (!mounted) return;
+          final current = _repeatGiftSession;
+          if (current == null || !_isSameRepeatGift(current, session)) {
+            _repeatComboCount = 1;
+          }
+          _armRepeatGiftSession(session);
         },
       ),
     );
@@ -9615,12 +9670,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   void _armRepeatGiftSession(RepeatGiftSession session) {
     _repeatGiftHideTimer?.cancel();
     // Fresh session: re-baseline local coins from the profile on the next tap.
-    if (_repeatGiftSession == null) {
+    final wasHidden = _repeatGiftSession == null;
+    if (wasHidden) {
       _giftCoinsLocal = -1;
+      if (_repeatComboCount <= 0) _repeatComboCount = 1;
     }
-    setState(() => _repeatGiftSession = session);
+    _repeatGiftSession = session;
+    // Only showing/hiding the button needs the room rebuilt; a tap on a
+    // visible button just restarts its ring through the notifier.
+    if (wasHidden) setState(() {});
+    _repeatComboTick.value++;
     _repeatGiftHideTimer = Timer(_repeatGiftVisibleFor, () {
       if (!mounted) return;
+      _repeatComboCount = 0;
       setState(() => _repeatGiftSession = null);
       _armBonusPattiHide();
     });
@@ -9630,6 +9692,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _repeatGiftHideTimer?.cancel();
     _repeatGiftHideTimer = null;
     _giftCoinsLocal = -1;
+    _repeatComboCount = 0;
     if (_repeatGiftSession != null && mounted) {
       setState(() => _repeatGiftSession = null);
     } else {
@@ -9717,17 +9780,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       priceCoins: session.priceCoins,
       giftName: session.giftName,
     );
-
-    _onGiftBroadcastFromSender({
-      'event_id': '${animationBatchId}_fx',
-      'animation_batch_id': animationBatchId,
-      'sender_id': myUser['id'].toString(),
-      'target_ids': targets,
-      'gift_icon': session.giftIcon,
-      'quantity': session.quantity,
-      'is_full_screen': session.isFullScreen,
-      'svga_url': session.svgaUrl,
-    });
+    // No pre-settle room broadcast here: the gateway's gift:send emits the
+    // settled room_gift to everyone. A per-tap gift:notify doubled the room
+    // fan-out and showed peers gifts that could still fail on balance.
   }
 
   void _enqueueRepeatGift() {
@@ -9756,7 +9811,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       return;
     }
 
-    if (_repeatGiftQueue.length >= _maxRepeatGiftQueued) {
+    final tail = _repeatGiftQueue.isEmpty ? null : _repeatGiftQueue.last;
+    final mergeIntoTail =
+        tail != null &&
+        _isSameRepeatGift(tail.session, session) &&
+        tail.quantity + session.quantity <= _maxRepeatGiftQuantity;
+    if (!mergeIntoTail && _repeatGiftQueue.length >= _maxRepeatGiftQueued) {
       debugPrint(
         '[GIFT_DRAIN] tap dropped — queue full (${_repeatGiftQueue.length})',
       );
@@ -9767,13 +9827,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     // Optimistic deduct so the next tap sees the spend before the profile stream.
     _giftCoinsLocal = coins - unitCost;
     ref.read(walletCoinsOverrideProvider.notifier).state = _giftCoinsLocal;
-    _repeatGiftQueue.add(
-      _PendingRepeatGift(
-        animationBatchId: animationBatchId,
-        unitCost: unitCost,
-        session: session,
-      ),
-    );
+    if (mergeIntoTail) {
+      tail.taps += 1;
+      tail.unitCost += unitCost;
+    } else {
+      _repeatGiftQueue.add(
+        _PendingRepeatGift(
+          animationBatchId: animationBatchId,
+          unitCost: unitCost,
+          session: session,
+        ),
+      );
+    }
+    _repeatComboCount += 1;
     _armRepeatGiftSession(session);
     _playRepeatGiftFxNow(
       session: session,
@@ -9807,6 +9873,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           final result = await _sendOneRepeatGiftDetailed(
             pending.session,
             animationBatchId: pending.animationBatchId,
+            quantity: pending.quantity,
+            expectedSpend: pending.unitCost,
           );
           if (!result.ok) {
             // Refund optimistic spend; the coins never left the wallet.
@@ -9866,6 +9934,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<({bool ok, bool insufficient})> _sendOneRepeatGiftDetailed(
     RepeatGiftSession session, {
     required String animationBatchId,
+    required int quantity,
+    required int expectedSpend,
   }) async {
     final myUser = ref.read(userProfileProvider).value;
     if (myUser == null) return (ok: false, insufficient: false);
@@ -9883,7 +9953,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               myUser: myUser,
               targetIds: targets,
               gift: session.toGiftMap(),
-              quantity: session.quantity,
+              quantity: quantity,
               animationBatchId: animationBatchId,
               allMembers: members,
             )
@@ -9895,7 +9965,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                   myUser: myUser,
                   targetId: targetId,
                   gift: session.toGiftMap(),
-                  quantity: session.quantity,
+                  quantity: quantity,
                   animationBatchId: animationBatchId,
                   allMembers: members,
                 ),
@@ -9914,7 +9984,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         }
         if (!o.success) continue;
         successfulTargets.add(targets[i]);
-        totalSpent += session.priceCoins * session.quantity;
+        totalSpent += session.priceCoins * quantity;
         if (o.luckyWin) anyLuckyWin = true;
       }
 
@@ -9924,7 +9994,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
       // Partial success (some targets paid): refund the unpaid share of the
       // optimistic full-unit deduct so the local balance stays honest.
-      final expectedSpend = _repeatGiftUnitCost(session);
       final unpaid = expectedSpend - totalSpent;
       if (unpaid > 0) {
         _giftCoinsLocal = (_giftCoinsLocal < 0 ? 0 : _giftCoinsLocal) + unpaid;
@@ -9946,7 +10015,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         targets: targets,
         animationBatchId: animationBatchId,
         giftIcon: session.giftIcon,
-        quantity: session.quantity,
+        quantity: quantity,
         isFullScreen: session.isFullScreen,
         svgaUrl: session.svgaUrl,
       );
@@ -9959,11 +10028,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
       // Keep optimistic wallet; users realtime stream settles truth without
       // flashing loading via invalidate(userProfileProvider).
-
-      final current = _repeatGiftSession;
-      if (mounted && current != null && _isSameRepeatGift(current, session)) {
-        _armRepeatGiftSession(current);
-      }
       return (ok: true, insufficient: insufficient);
     } catch (e) {
       debugPrint('Repeat gift error: $e');
@@ -12692,113 +12756,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   Widget _buildRepeatGiftFloatingButton() {
     final session = _repeatGiftSession!;
-
-    return Material(
-      color: Colors.transparent,
-      elevation: 8,
-      borderRadius: BorderRadius.circular(28),
-      child: InkWell(
-        onTap: _enqueueRepeatGift,
-        onLongPress: _clearRepeatGiftSession,
-        borderRadius: BorderRadius.circular(28),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFFF4D8D), Color(0xFFFFB347)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.pinkAccent.withValues(alpha: 0.4),
-                blurRadius: 14,
-                offset: const Offset(0, 5),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white54, width: 1.2),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(13),
-                    child: session.giftIcon.isNotEmpty
-                        ? CachedNetworkImage(
-                            imageUrl: session.giftIcon,
-                            fit: BoxFit.cover,
-                            errorWidget: (_, _, _) => const Icon(
-                              Icons.card_giftcard,
-                              color: Colors.white,
-                              size: 24,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.card_giftcard,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 120),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'Combo',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.4,
-                          height: 1.1,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'x${session.quantity} · ${session.targetUsername}',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.88),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.22),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.replay_rounded,
-                    color: Colors.white,
-                    size: 18,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return RoomGiftComboButton(
+      giftIcon: session.giftIcon,
+      count: _repeatComboCount < 1 ? 1 : _repeatComboCount,
+      tick: _repeatComboTick.value,
+      window: _repeatGiftVisibleFor,
+      onTap: _enqueueRepeatGift,
+      onLongPress: _clearRepeatGiftSession,
     );
   }
 

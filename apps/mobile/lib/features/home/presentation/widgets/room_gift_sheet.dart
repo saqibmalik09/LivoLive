@@ -78,15 +78,31 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
   @override
   void initState() {
     super.initState();
-    _selectedUserIds.addAll(widget.initialSelectedUserIds);
+    _selectedUserIds.addAll(
+      widget.initialSelectedUserIds
+          .map((id) => id.toString().trim())
+          .where((id) => id.isNotEmpty),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      clearStaleWalletOverrideForGiftSheet(
+        ref,
+        ref.read(userProfileProvider).value,
+      );
       if (widget.initialIsAllSelected) {
         _selectAllMembers();
       } else {
         _syncTargetWithSeatedMembers();
+        _ensureDefaultTargetSelected();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    // Never leave the global optimistic wallet stuck if this sheet dies mid-send.
+    _isSending = false;
+    super.dispose();
   }
 
   @override
@@ -150,24 +166,67 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
     }
   }
 
+  /// Send stays grey when nobody is selected — pick the first seat/audience
+  /// member so a normal open is always one tap away from sending.
+  void _ensureDefaultTargetSelected() {
+    if (_selectedUserIds.isNotEmpty) return;
+    final members = _getAllMembers();
+    if (members.isEmpty) return;
+    final firstId = members.first['id']?.toString().trim() ?? '';
+    if (firstId.isEmpty) return;
+    setState(() => _selectedUserIds.add(firstId));
+    _notifyTargetSelection();
+  }
+
   List<Map<String, dynamic>> _getAllMembers() {
     final Map<String, Map<String, dynamic>> uniqueMembers = {};
 
-    for (var seat in widget.seats) {
-      if (seat['user'] != null) {
-        final user = Map<String, dynamic>.from(seat['user']);
-        uniqueMembers[user['id']] = user;
-      }
+    void addUser(dynamic raw) {
+      if (raw is! Map) return;
+      final user = Map<String, dynamic>.from(raw);
+      final id = user['id']?.toString().trim() ?? '';
+      if (id.isEmpty) return;
+      user['id'] = id;
+      uniqueMembers[id] = user;
+    }
+
+    for (final seat in widget.seats) {
+      addUser(seat['user']);
+    }
+    for (final person in widget.audience) {
+      addUser(person);
+      addUser(person['user']);
     }
 
     return uniqueMembers.values.toList();
   }
 
+  void _toast(String message, {Color color = Colors.redAccent}) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Keep override in sync when the profile stream catches up — never write
+    // providers during build (that was locking the Send button after a send).
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(userProfileProvider, (
+      _,
+      next,
+    ) {
+      syncWalletCoinsOverrideFromProfile(ref, next.valueOrNull);
+    });
     final categoriesAsync = ref.watch(giftCategoriesProvider);
     final userProfile = ref.watch(userProfileProvider).value;
-    syncWalletCoinsOverrideFromProfile(ref, userProfile);
+    ref.watch(walletCoinsOverrideProvider);
     final coins = resolveWalletCoins(ref, userProfile);
     final allMembers = _getAllMembers();
 
@@ -488,12 +547,8 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
           _buildQuantitySelector(),
           const SizedBox(width: 12),
           ElevatedButton(
-            onPressed:
-                (_selectedGift != null &&
-                    _selectedUserIds.isNotEmpty &&
-                    !_isSending)
-                ? () => _handleSendGift(members)
-                : null,
+            // Always tappable — show why send failed instead of a dead grey button.
+            onPressed: _isSending ? null : () => _handleSendGift(members),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.amber,
               foregroundColor: Colors.black,
@@ -560,52 +615,73 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
   }
 
   void _handleSendGift(List<Map<String, dynamic>> allMembers) async {
-    if (_selectedGift == null) return;
+    debugPrint(
+      '[GIFT_SEND] tap sending=$_isSending '
+      'gift=${_selectedGift?['id']} '
+      'targets=${_selectedUserIds.length} '
+      'qty=$_selectedQuantity',
+    );
+    if (_isSending) return;
+    if (_selectedGift == null) {
+      _toast('Select a gift first');
+      return;
+    }
+
+    if (_selectedUserIds.isEmpty) {
+      _ensureDefaultTargetSelected();
+    }
 
     final targets = _selectedUserIds
+        .map((id) => id.toString().trim())
         .where((id) => id.isNotEmpty)
         .toList(growable: false);
 
-    if (targets.isEmpty) return;
+    if (targets.isEmpty) {
+      _toast('Select who to send the gift to');
+      return;
+    }
 
-    final totalCost =
-        (_selectedGift!['price_coins'] as int) *
-        _selectedQuantity *
-        targets.length;
+    final unitPrice =
+        (_selectedGift!['price_coins'] as num?)?.toInt() ?? 0;
+    if (unitPrice <= 0) {
+      debugPrint(
+        '[GIFT_SEND] bad price_coins=${_selectedGift!['price_coins']}',
+      );
+      _toast('Gift price unavailable — try another gift');
+      return;
+    }
+
+    final totalCost = unitPrice * _selectedQuantity * targets.length;
 
     final userProfile = ref.read(userProfileProvider).value;
     final currentCoins = resolveWalletCoins(ref, userProfile);
+    debugPrint(
+      '[GIFT_SEND] coins=$currentCoins cost=$totalCost '
+      'override=${ref.read(walletCoinsOverrideProvider)} '
+      'profileCoins=${userProfile?['coins']}',
+    );
 
     if (currentCoins < totalCost) {
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.room_insufficientCoins),
-          backgroundColor: Colors.redAccent,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      _toast(context.l10n.room_insufficientCoins);
       return;
     }
 
     // Cut balance instantly (combo + normal) — never wait on gateway/RPC.
     applyOptimisticCoinSpend(ref, totalCost);
-    setState(() => _isSending = true);
+    if (mounted) setState(() => _isSending = true);
 
     try {
       final supabase = Supabase.instance.client;
       final myUser = ref.read(userProfileProvider).value;
-      if (myUser == null) {
+      if (myUser == null || myUser['id'] == null) {
         refundOptimisticCoinSpend(ref, totalCost);
+        _toast('Profile still loading — try again');
         return;
       }
 
       bool anySuccess = false;
-      int newWealthLevel = userProfile?['wealth_level'] ?? 1;
       int totalSpentSuccess = 0;
-      final giftPrice =
-          (_selectedGift!['price_coins'] as num).toInt() * _selectedQuantity;
+      final giftPrice = unitPrice * _selectedQuantity;
       final animationBatchId = const Uuid().v4();
       final giftIcon = _selectedGift!['icon_url']?.toString() ?? '';
       final svgaUrl = _selectedGift!['svga_url']?.toString() ?? '';
@@ -654,7 +730,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
             targetAvatarUrl: targetAvatarUrl,
             giftId: _selectedGift!['id'].toString(),
             giftName: _selectedGift!['name'].toString(),
-            priceCoins: (_selectedGift!['price_coins'] as num).toInt(),
+            priceCoins: unitPrice,
             giftIcon: giftIcon,
             svgaUrl: svgaUrl,
             isFullScreen: isFullScreen,
@@ -674,13 +750,16 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
         isFullScreen: isFullScreen,
         svgaUrl: svgaUrl,
         playFullScreenSvga: isFullScreen,
-        priceCoins: (_selectedGift!['price_coins'] as num).toInt(),
+        priceCoins: unitPrice,
         giftName: _selectedGift!['name']?.toString(),
       );
 
+      // Unlock Send before network so a slow/hung gateway cannot freeze the UI.
       if (mounted) {
         setState(() => _isSending = false);
         Navigator.pop(context);
+      } else {
+        _isSending = false;
       }
 
       final roomId = widget.room['id'].toString();
@@ -780,7 +859,6 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
         if (!outcome.success) continue;
         anySuccess = true;
         totalSpentSuccess += giftPrice;
-        newWealthLevel = outcome.newWealthLevel;
 
         if (outcome.luckyWin) {
           final target = allMembers.firstWhere(
@@ -854,7 +932,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
                 targetUsername: 'All (${successfulTargets.length})',
                 giftId: _selectedGift!['id'].toString(),
                 giftName: _selectedGift!['name'].toString(),
-                priceCoins: (_selectedGift!['price_coins'] as num).toInt(),
+                priceCoins: unitPrice,
                 giftIcon: giftIcon,
                 svgaUrl: svgaUrl,
                 isFullScreen: isFullScreen,
@@ -876,7 +954,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
                 targetAvatarUrl: target['avatar_url']?.toString(),
                 giftId: _selectedGift!['id'].toString(),
                 giftName: _selectedGift!['name'].toString(),
-                priceCoins: (_selectedGift!['price_coins'] as num).toInt(),
+                priceCoins: unitPrice,
                 giftIcon: giftIcon,
                 svgaUrl: svgaUrl,
                 isFullScreen: isFullScreen,
@@ -895,7 +973,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
                 targetUsername: '${successfulTargets.length} users',
                 giftId: _selectedGift!['id'].toString(),
                 giftName: _selectedGift!['name'].toString(),
-                priceCoins: (_selectedGift!['price_coins'] as num).toInt(),
+                priceCoins: unitPrice,
                 giftIcon: giftIcon,
                 svgaUrl: svgaUrl,
                 isFullScreen: isFullScreen,
@@ -919,7 +997,8 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
         );
       }
     } finally {
-      if (mounted) setState(() => _isSending = false);
+      _isSending = false;
+      if (mounted) setState(() {});
     }
   }
 }

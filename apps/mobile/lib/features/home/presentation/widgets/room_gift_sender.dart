@@ -50,8 +50,9 @@ class RepeatGiftSession {
     this.isLuckyProGift = false,
   });
 
-  bool get usesGatewaySettle =>
-      AppConstants.useGatewayLuckyEngine && (isLuckyGift || isLuckyProGift);
+  /// Every category settles on the gateway, matching the gift sheet; the
+  /// RPC fallback inside sendRoomGiftsViaGateway covers a down socket.
+  bool get usesGatewaySettle => AppConstants.useGatewayLuckyEngine;
 
   Map<String, dynamic> toGiftMap() => {
     'id': giftId,

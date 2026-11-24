@@ -36,7 +36,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- SYSTEM_ALERT_WINDOW removed: floating-over-apps room bubble is retired.
+         In-app minimize does not need draw-over-other-apps. -->
+    <uses-permission
+        android:name="android.permission.SYSTEM_ALERT_WINDOW"
+        tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- Android 15 / Play: do not revive mic FGS from BOOT_COMPLETED -->
@@ -75,14 +79,10 @@
             android:name="id.flutter.flutter_background_service.BootReceiver"
             tools:node="remove" />
 
+        <!-- OverlayService removed with system floating bubble. -->
         <service
             android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Floating voice room bubble while user multitasks in other apps" />
-        </service>
+            tools:node="remove" />
 
         <activity
             android:name=".MainActivity"

@@ -27,7 +27,6 @@ class RoomBubbleLifecycleHost extends ConsumerStatefulWidget {
 class _RoomBubbleLifecycleHostState
     extends ConsumerState<RoomBubbleLifecycleHost>
     with WidgetsBindingObserver {
-  bool _pendingPermissionPrompt = false;
   bool _showInProgress = false;
   bool _appInForeground = true;
   bool _exitInFlight = false;
@@ -152,12 +151,7 @@ class _RoomBubbleLifecycleHostState
 
     RoomFloatingBubbleService.cacheSession(session);
 
-    if (!await RoomFloatingBubbleService.hasPermission()) {
-      _pendingPermissionPrompt = true;
-      debugPrint('[RoomBubble] permission missing — fail-closed mic mute');
-      unawaited(_failClosedMuteOrLeave(roomId));
-      return;
-    }
+    if (!RoomFloatingBubbleService.showsSystemOverlayBubble) return;
 
     if (_appInForeground) return;
 
@@ -241,10 +235,6 @@ class _RoomBubbleLifecycleHostState
 
   Future<void> _onAppResumed() async {
     await _hideRoomBubble(force: true, reason: RoomBubbleHideReason.appResumed);
-
-    // Never re-prompt for SYSTEM_ALERT_WINDOW — overlay bubble is retired.
-    _pendingPermissionPrompt = false;
-    if (!RoomFloatingBubbleService.showsSystemOverlayBubble) return;
   }
 
   Future<void> _onAppDetached() async {

@@ -987,13 +987,22 @@ function emitCachedSeats(socket, roomId) {
   const gen = bumpSeatEmit(socket);
   void (async () => {
     try {
-      const seats = await state.getSeatsSnapshot(pubClient, roomId);
+      // Gift counts ride with the early seats so the hearts under each seat
+      // fill in with the avatars, not after the full snapshot.
+      const [seats, seatGiftTotals] = await Promise.all([
+        state.getSeatsSnapshot(pubClient, roomId),
+        state.getSeatGiftTotals(pubClient, roomId).catch(() => null),
+      ]);
       // A cache miss returns null; an empty array is a real answer ("nobody is
       // seated") and is worth sending, so the seats render immediately instead
       // of waiting for the full snapshot.
       if (!Array.isArray(seats)) return;
       if (!socket.connected || socket.data.seatEmitGen !== gen) return;
-      socket.emit("room:snapshot", { room_id: roomId, seats: seats });
+      socket.emit("room:snapshot", {
+        room_id: roomId,
+        seats: seats,
+        ...(seatGiftTotals ? { seat_gift_totals: seatGiftTotals } : {}),
+      });
     } catch (err) {
       console.warn("[room:join] early seats:", err.message);
     }
@@ -2685,7 +2694,11 @@ io.on("connection", (socket) => {
       const clientOpId = String(
         payload.client_op_id || payload.clientOpId || animationBatchId,
       ).trim();
-      const quantity = Math.max(1, Math.trunc(Number(payload.quantity) || 1));
+      // Same ceiling gift:notify applies; clients merge combo taps up to it.
+      const quantity = Math.min(
+        9999,
+        Math.max(1, Math.trunc(Number(payload.quantity) || 1)),
+      );
       const rawTargets = Array.isArray(payload.target_ids)
         ? payload.target_ids
         : Array.isArray(payload.targetIds)
