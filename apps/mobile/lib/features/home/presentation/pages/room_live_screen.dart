@@ -105,6 +105,7 @@ import 'package:sk_live/features/home/presentation/widgets/team_pk/team_pk_setti
 import 'package:sk_live/features/home/presentation/widgets/room_mic_emoji_sheet.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_mic_emoji_overlay.dart';
 import 'package:sk_live/core/util/app_constants.dart';
+import 'package:sk_live/core/util/debug_probe.dart'; // agent log
 import 'package:sk_live/core/models/big_gift_patti_announcement.dart';
 import 'package:sk_live/core/services/big_gift_patti_broadcast_controller.dart';
 import 'package:sk_live/core/util/big_gift_patti_util.dart';
@@ -372,7 +373,14 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   DateTime? _localUnmuteGuardUntil;
 
   DateTime? _localMuteGuardUntil;
-  int? _mySeatIndex;
+  int? _mySeatIndexValue;
+  // Every change of the user's own seat also tells the voice engine, because an
+  // open voice token lets everyone publish and the seat is what decides who may.
+  int? get _mySeatIndex => _mySeatIndexValue;
+  set _mySeatIndex(int? value) {
+    _mySeatIndexValue = value;
+    OrbitVoiceSessionService.setSeatPublishAllowed(value != null);
+  }
   String _activeTab = 'chat';
 
   void _notifyChatListChanged() {
@@ -905,6 +913,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       unawaited(_fetchRoomLevelStats());
       ref.read(recentRoomsProvider.notifier).addRoom(widget.room);
       unawaited(_promptBubblePermissionOnce());
+      unawaited(_ensureMicPermissionAtEntry());
       unawaited(_ensureRoomShortIdLoaded());
     });
 
@@ -1535,6 +1544,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
     switch (event) {
       case RoomLiveBroadcast.eventSeat:
+        // #region agent log
+        DebugProbe.log('D', 'room_live_screen:_dispatchGatewayRoomEvent', 'seat event received', {
+          'action': payload['action']?.toString(),
+          'seat': payload['seat_index'],
+          'actor8': (payload['actor_user_id']?.toString() ?? '-').padRight(8).substring(0, 8),
+        });
+        // #endregion
         _applySeatBroadcast(payload);
       case RoomLiveBroadcast.eventMeta:
         _handleRoomMetaBroadcast(payload);
@@ -4599,6 +4615,16 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   Future<void> _startSpeakingUnguarded(bool shouldOpenMic) async {
     if (ref.read(userProfileProvider).value == null) return;
+    // #region agent log
+    DebugProbe.log('A', 'room_live_screen:_startSpeaking', 'startSpeaking entry', {
+      'openMic': shouldOpenMic,
+      'liveForRoom':
+          OrbitVoiceSessionService.isLiveForRoom(widget.room['id'].toString()),
+      'canPublishNow': OrbitVoiceSessionService.canPublishNow,
+      'orbitCanPublish': _orbitCanPublish,
+      'muted': _isMuted,
+    });
+    // #endregion
     devLog(
       '[SEAT] startSpeaking openMic=$shouldOpenMic '
       'zegoReady=$_zegoLoginReady mySeat=$_mySeatIndex '
@@ -8675,6 +8701,51 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     await _startSpeaking(seat['is_muted'] != true);
   }
 
+  /// Starts, at seat tap, everything the seat claim does not need to wait for.
+  /// Fire-and-forget: if any part fails, taking the seat still works the old way.
+  void _prepareSeatVoice(int index) {
+    final roomId = widget.room['id']?.toString();
+    if (roomId == null || !_useOrbitVoice) return;
+    // With an open voice token this is the whole permission step: the mic may
+    // publish now, while the seat claim is still on its way.
+    OrbitVoiceSessionService.markSitIntent();
+    // #region agent log
+    final dbgPrepareSw = Stopwatch()..start();
+    // #endregion
+    unawaited(
+      RoomRealtimeSocket.instance
+          .seatPrepare({'roomId': roomId, 'seatIndex': index})
+          .then((res) {
+            // #region agent log
+            DebugProbe.log('G', 'room_live_screen:_prepareSeatVoice', 'seat:prepare ack', {
+              'ms': dbgPrepareSw.elapsedMilliseconds,
+              'ok': res?['ok'],
+              'perm': res?['perm'],
+              'error': res?['error'],
+              'canPublishNow': OrbitVoiceSessionService.canPublishNow,
+            });
+            // #endregion
+          }),
+    );
+    OrbitVoiceSessionService.warmPublisher();
+    unawaited(
+      Permission.microphone.isGranted.then((granted) {
+        if (granted) OrbitVoiceSessionService.prepareToSpeak();
+      }),
+    );
+  }
+
+  /// The OS microphone prompt belongs at room entry, not in the middle of
+  /// taking a seat where it adds its own delay.
+  Future<void> _ensureMicPermissionAtEntry() async {
+    try {
+      if (await Permission.microphone.isGranted) return;
+      await Permission.microphone.request();
+    } catch (e) {
+      debugPrint('[ROOM] mic permission at entry: $e');
+    }
+  }
+
   Future<void> _sitDown(int index) async {
     final user = ref.read(userProfileProvider).value;
     if (user == null) return;
@@ -8697,6 +8768,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
       return;
     }
+
+    // Everything that does not depend on the claim starts now, while the dialog
+    // is on screen: the gateway grants publish for this seat, the publisher
+    // transport connects, and the mic opens and is published muted. Choosing
+    // "Open Mic" is then an unmute instead of grant + capture + publish.
+    _prepareSeatVoice(index);
 
     bool? openMic = await showDialog<bool>(
       context: context,
@@ -8722,12 +8799,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
     if (openMic == null) {
       devLog('[SEAT] sitDown cancelled (dialog dismissed)');
+      OrbitVoiceSessionService.clearSitIntent();
+      OrbitVoiceSessionService.discardPrecapturedMic();
       return;
     }
 
     var wantOpenMic = openMic;
+    if (!wantOpenMic) OrbitVoiceSessionService.discardPrecapturedMic();
     if (wantOpenMic) {
-      final status = await Permission.microphone.request();
+      // Asked once on room entry; only prompt here if that was declined.
+      final alreadyGranted = await Permission.microphone.isGranted;
+      final status = alreadyGranted
+          ? PermissionStatus.granted
+          : await Permission.microphone.request();
       if (!status.isGranted) {
         devLog('[SEAT] sitDown mic permission denied — force muted seat');
         wantOpenMic = false;
@@ -8741,10 +8825,22 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       }
     }
 
+    // Covers the first-ever grant (permission was only just given) and is a
+    // no-op when the tap-time prepare already ran.
+    if (wantOpenMic) OrbitVoiceSessionService.prepareToSpeak();
     devLog(
       '[SEAT] sitDown confirmed openMic=$wantOpenMic '
       'ms=${sitSw.elapsedMilliseconds}',
     );
+    // #region agent log
+    DebugProbe.log('A', 'room_live_screen:_sitDown', 'sit confirmed', {
+      'openMic': wantOpenMic,
+      'seat': index,
+      'tapToConfirmMs': sitSw.elapsedMilliseconds,
+      'lkConnected': OrbitVoiceSessionService.isConnected,
+      'canPublishNow': OrbitVoiceSessionService.canPublishNow,
+    });
+    // #endregion
 
     final supabase = Supabase.instance.client;
     final roomId = widget.room['id'];
@@ -8791,6 +8887,21 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       'prevSeat=$previousSeatIndex ms=${sitSw.elapsedMilliseconds}',
     );
 
+    // Optimistic: the prepared track is already published, so unmuting costs one
+    // signalling message. It runs alongside the claim; a rejected claim mutes
+    // and unpublishes again in the rollback below.
+    // If the grant has not landed yet (confirmed faster than the prepare), it is
+    // awaited here instead of waiting for the claim ack to start.
+    if (wantOpenMic && OrbitVoiceSessionService.isConnected) {
+      unawaited(() async {
+        if (await OrbitVoiceSessionService.waitForPublishPermission(
+          timeout: const Duration(seconds: 3),
+        )) {
+          await OrbitVoiceSessionService.setMicEnabled(true);
+        }
+      }());
+    }
+
     var claimSucceeded = false;
     try {
       final claimed = await _claimSeatWithRetry(
@@ -8813,6 +8924,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         '[SEAT] sitDown CLAIM OK seat=$index gen=$_seatSessionGeneration '
         'ms=${sitSw.elapsedMilliseconds}',
       );
+      // #region agent log
+      DebugProbe.log('A', 'room_live_screen:_sitDown', 'claim ack', {
+        'seat': index,
+        'tapToAckMs': sitSw.elapsedMilliseconds,
+      });
+      // #endregion
 
       if (!AppConstants.useRealtimeGateway) {
         if (previousSeatIndex != null && previousSeatIndex != index) {
@@ -8866,6 +8983,8 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         devLog('[SEAT] sitDown keep seat after post-claim error');
         return;
       }
+      OrbitVoiceSessionService.clearSitIntent();
+      unawaited(OrbitVoiceSessionService.unpublishMic());
       devLog('[SEAT] sitDown rollback → force fetchSeats');
       await _fetchSeats(force: true);
       if (mounted) {
@@ -8938,6 +9057,14 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             leaveSeat: true,
             billingOnly: true,
           );
+          if (RoomRealtimeSocket.instance.gatewayRevokesPublishOnLeave) {
+            // The gateway takes publish back server-side on seat leave, so the
+            // connection stays up. Reconnecting here used to cost 4-10 s of
+            // silence and threw away the warmed publisher for the next seat.
+            await OrbitVoiceSessionService.unpublishMic();
+            _zegoLoginReady = true;
+            return;
+          }
           final session = await OrbitVoiceSessionService.fetchSession(
             roomId: roomId,
             openMic: false,

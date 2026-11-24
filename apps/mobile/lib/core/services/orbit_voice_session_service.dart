@@ -245,6 +245,36 @@ class OrbitVoiceSessionService {
     Duration timeout = const Duration(milliseconds: 2500),
   }) => _e.waitForPublishPermission(timeout: timeout);
 
+  /// Start connecting the publisher transport before the first publish.
+  static void warmPublisher() =>
+      unawaited(LiveKitVoiceEngine.instance.warmPublisher());
+
+  /// Open the microphone before the publish grant arrives. Needs the OS mic
+  /// permission to be granted already.
+  static void precaptureMic() =>
+      unawaited(LiveKitVoiceEngine.instance.precaptureMic());
+
+  /// Connect the publisher, open the mic and publish it muted as soon as the
+  /// gateway's early grant lands, so taking the seat is just an unmute. Needs
+  /// the OS mic permission already.
+  static void prepareToSpeak() =>
+      unawaited(LiveKitVoiceEngine.instance.prepareToSpeak());
+
+  /// Remove the microphone publication (seat left). The gateway revokes
+  /// publish, so the connection stays up.
+  static Future<void> unpublishMic() =>
+      LiveKitVoiceEngine.instance.unpublishMic();
+
+  /// Seat state for the speak permission. See LiveKitVoiceEngine.canPublishNow.
+  static void setSeatPublishAllowed(bool onSeat) =>
+      LiveKitVoiceEngine.instance.setSeatPublishAllowed(onSeat);
+  static void markSitIntent() => LiveKitVoiceEngine.instance.markSitIntent();
+  static void clearSitIntent() => LiveKitVoiceEngine.instance.clearSitIntent();
+
+  /// Release whatever [prepareToSpeak] set up and was not used.
+  static void discardPrecapturedMic() =>
+      unawaited(LiveKitVoiceEngine.instance.discardPrecapturedMic());
+
   static Future<void> setRemoteVolume(double volume) =>
       _e.setRemoteVolume(volume);
 

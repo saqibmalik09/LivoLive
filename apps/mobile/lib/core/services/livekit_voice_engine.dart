@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:sk_live/core/services/voice_types.dart';
+import 'package:sk_live/core/util/debug_probe.dart'; // agent log
 
 import 'voice_engine.dart';
 
@@ -19,6 +20,41 @@ class LiveKitVoiceEngine implements VoiceEngine {
   LiveKitVoiceEngine._();
   static final LiveKitVoiceEngine instance = LiveKitVoiceEngine._();
 
+  // #region agent log
+  final Stopwatch _dbgLoginSw = Stopwatch();
+  final Set<String> _dbgSpoke = <String>{};
+
+  /// Logs every change of the publisher peer connection state from the moment
+  /// the mic starts until it connects (or 10 s). Hypothesis F: the publisher
+  /// transport is not connected when the first publish happens, so audio only
+  /// reaches the SFU after a fresh ICE + DTLS handshake.
+  void _dbgWatchPublisher() {
+    final pc = _room?.engine.publisher?.pc;
+    if (pc == null) {
+      DebugProbe.log('F', 'livekit_voice_engine:publisher', 'publisher missing', {});
+      return;
+    }
+    final sw = Stopwatch()..start();
+    unawaited(() async {
+      var last = '';
+      while (sw.elapsedMilliseconds < 10000 && _room != null) {
+        final conn = (await pc.getConnectionState())?.name ?? 'null';
+        final ice = (await pc.getIceConnectionState())?.name ?? 'null';
+        final now = '$conn/$ice';
+        if (now != last) {
+          last = now;
+          DebugProbe.log('F', 'livekit_voice_engine:publisher', 'publisher pc state', {
+            'conn': conn,
+            'ice': ice,
+            'sinceMicStartMs': sw.elapsedMilliseconds,
+          });
+        }
+        if (conn.endsWith('Connected')) break;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }());
+  }
+  // #endregion
   lk.Room? _room;
   lk.EventsListener<lk.RoomEvent>? _events;
   String? _appRoomId;
@@ -109,9 +145,35 @@ class LiveKitVoiceEngine implements VoiceEngine {
   @override
   bool get isConnected => _room?.connectionState == lk.ConnectionState.connected;
 
+  /// Whether this user may speak: the LiveKit grant, and for an open token also
+  /// a seat. An open token (it restricts the sources to the microphone) lets
+  /// everyone publish from the moment they join so taking a seat needs no
+  /// server round trip, which makes the grant alone useless as an "on a seat"
+  /// signal. The rest of the app reads this getter as exactly that signal, so it
+  /// keeps meaning "allowed to speak right now".
   @override
-  bool get canPublishNow =>
-      _room?.localParticipant?.permissions.canPublish ?? false;
+  bool get canPublishNow {
+    final perms = _room?.localParticipant?.permissions;
+    if (perms == null || !perms.canPublish) return false;
+    if (perms.canPublishSources.isEmpty) return true;
+    return _seatPublishAllowed || DateTime.now().isBefore(_sitIntentUntil);
+  }
+
+  bool _seatPublishAllowed = false;
+  DateTime _sitIntentUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Set by the room screen whenever the user's own seat changes.
+  void setSeatPublishAllowed(bool onSeat) => _seatPublishAllowed = onSeat;
+
+  /// The user tapped a seat and is about to take it. Lets the prepared mic
+  /// publish while the seat claim is still in flight; it lapses on its own.
+  void markSitIntent() {
+    _sitIntentUntil = DateTime.now().add(const Duration(seconds: 30));
+  }
+
+  void clearSitIntent() {
+    _sitIntentUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  }
 
   @override
   bool get hasMicPublication =>
@@ -179,6 +241,13 @@ class LiveKitVoiceEngine implements VoiceEngine {
     if (session.token.isEmpty || session.livekitUrl.isEmpty) {
       throw StateError('livekit: session is missing token or url');
     }
+    // #region agent log
+    final dbgPrevConnected = isConnected;
+    _dbgLoginSw
+      ..reset()
+      ..start();
+    _dbgSpoke.clear();
+    // #endregion
     await logoutRoom();
 
     final room = lk.Room(
@@ -211,7 +280,42 @@ class LiveKitVoiceEngine implements VoiceEngine {
         debugPrint('[LK] disconnected: $reason');
         _onTransportLost?.call(reason);
       })
+      // #region agent log
+      ..on<lk.LocalTrackPublishedEvent>((e) {
+        DebugProbe.log('A', 'livekit_voice_engine:events', 'local track published', {
+          'kind': e.publication.kind.name,
+          'sinceLoginMs': _dbgLoginSw.elapsedMilliseconds,
+        });
+      })
+      ..on<lk.TrackPublishedEvent>((e) {
+        DebugProbe.log('B', 'livekit_voice_engine:events', 'remote track published', {
+          'remote8': e.participant.identity.padRight(8).substring(0, 8),
+          'kind': e.publication.kind.name,
+        });
+      })
+      ..on<lk.TrackSubscribedEvent>((e) {
+        DebugProbe.log('B', 'livekit_voice_engine:events', 'remote track subscribed', {
+          'remote8': e.participant.identity.padRight(8).substring(0, 8),
+          'kind': e.publication.kind.name,
+        });
+        final remote = e.track;
+        if (remote is lk.RemoteAudioTrack) {
+          unawaited(_dbgSampleRemoteAudio(remote, e.participant.identity));
+        }
+      })
+      // #endregion
       ..on<lk.ActiveSpeakersChangedEvent>((e) {
+        // #region agent log
+        for (final p in e.speakers) {
+          if (p.audioLevel > 0.01 && _dbgSpoke.add(p.identity)) {
+            DebugProbe.log('C', 'livekit_voice_engine:events', 'first audible speaker', {
+              'who8': p.identity.padRight(8).substring(0, 8),
+              'isLocal': p is lk.LocalParticipant,
+              'level': p.audioLevel,
+            });
+          }
+        }
+        // #endregion
         final handler = _onSpeakerLevels;
         if (handler == null) return;
         final levels = <String, double>{
@@ -229,6 +333,10 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _room = room;
     _events = events;
     _appRoomId = session.appRoomId ?? session.orbitRoomId;
+    // The token's own can_publish is seat-derived; it is the starting point for
+    // an open token, and the room screen keeps it current from then on.
+    _seatPublishAllowed = session.canPublish;
+    clearSitIntent();
 
     // The audio session type is decided once, here, from the grant in the
     // token — call audio for someone who may speak, media playback for a
@@ -236,10 +344,25 @@ class LiveKitVoiceEngine implements VoiceEngine {
     // handed routing back to Android (which picks the earpiece) and dropped
     // playback to the much quieter call volume mid-room.
     await _applyAudioSessionFor(publishing: session.canPublish);
+    // #region agent log
+    final dbgBeforeConnectMs = _dbgLoginSw.elapsedMilliseconds;
+    // #endregion
     await room.connect(session.livekitUrl, session.token);
+    // #region agent log
+    DebugProbe.log('A', 'livekit_voice_engine:loginRoom', 'room.connect done', {
+      'canPublishToken': session.canPublish,
+      'wasConnectedBefore': dbgPrevConnected,
+      'preConnectMs': dbgBeforeConnectMs,
+      'connectMs': _dbgLoginSw.elapsedMilliseconds - dbgBeforeConnectMs,
+    });
+    // #endregion
     await _reassertSpeakerRoute();
     // From here a headset plugged in mid-call re-routes straight away.
     _startDeviceChangeWatch();
+    // The publisher transport's first ICE + DTLS costs ~1.9 s and used to land
+    // on the first seat tap, which is the one that felt slow. Pay it just after
+    // connect instead, once the connect burst is over.
+    Timer(const Duration(seconds: 1), () => unawaited(warmPublisher()));
 
     // The token's grant is authoritative; only publish if the server allowed it.
     if (_micIntent && canPublishNow) {
@@ -259,6 +382,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _events = null;
     _appRoomId = null;
     _lastSpeakers = <String>{};
+    unawaited(discardPrecapturedMic());
     try {
       await events?.dispose();
       await room?.disconnect();
@@ -290,8 +414,15 @@ class LiveKitVoiceEngine implements VoiceEngine {
     if (local == null) return false;
     if (enabled && !canPublishNow) {
       debugPrint('[LK] mic denied — token grant has canPublish=false');
+      // #region agent log
+      DebugProbe.log('A', 'livekit_voice_engine:setMicEnabled', 'mic denied no grant', {});
+      // #endregion
       return false;
     }
+    // #region agent log
+    final dbgMicSw = Stopwatch()..start();
+    if (enabled) _dbgWatchPublisher();
+    // #endregion
     try {
       if (enabled && _sessionPublishing != true) {
         // First publish on a connection that was opened as a listener: the
@@ -307,12 +438,327 @@ class LiveKitVoiceEngine implements VoiceEngine {
       // trigger a session switch plus four route re-asserts spread over 2.8
       // seconds, and that churn is what made voice cut in and out and jump
       // between the speaker and the earpiece every time someone took the mic.
-      await local.setMicrophoneEnabled(enabled);
+      await _setMicOnLocal(local, enabled);
+      // #region agent log
+      if (enabled) unawaited(_dbgSampleLocalAudio());
+      // #endregion
+      // #region agent log
+      if (enabled) {
+        DebugProbe.log('A', 'livekit_voice_engine:setMicEnabled', 'mic enabled', {
+          'ms': dbgMicSw.elapsedMilliseconds,
+          'liveTrack': hasLiveMicTrack,
+          'sinceLoginMs': _dbgLoginSw.elapsedMilliseconds,
+        });
+      }
+      // #endregion
       return hasLiveMicTrack == enabled;
     } catch (e) {
       debugPrint('[LK] setMicEnabled($enabled): $e');
       return false;
     }
+  }
+
+  // #region agent log
+  // Loudness evidence for "voice is very quiet for 1-2 s after taking the mic":
+  // sender side = level of what this phone captures and sends, receiver side =
+  // energy / concealment / jitter-buffer of what the listener actually decodes.
+  bool _dbgSamplingLocal = false;
+  Future<void> _dbgSampleLocalAudio() async {
+    if (_dbgSamplingLocal) return;
+    _dbgSamplingLocal = true;
+    final sw = Stopwatch()..start();
+    try {
+      for (var i = 0; i < 24; i++) {
+        final pub = _room?.localParticipant?.getTrackPublicationBySource(lk.TrackSource.microphone);
+        final track = pub?.track;
+        if (track is lk.LocalAudioTrack) {
+          final s = await track.getSenderStats();
+          DebugProbe.log('H', 'livekit_voice_engine:localAudio', 'sender level', {
+            't': sw.elapsedMilliseconds,
+            'level': s?.audioSourceStats?.audioLevel,
+            'energy': s?.audioSourceStats?.totalAudioEnergy,
+            'muted': pub?.muted,
+            'lost': s?.packetsLost,
+          });
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    } catch (e) {
+      debugPrint('[LK] dbg local audio sample: $e');
+    } finally {
+      _dbgSamplingLocal = false;
+    }
+  }
+
+  Future<void> _dbgSampleRemoteAudio(lk.RemoteAudioTrack track, String identity) async {
+    final sw = Stopwatch()..start();
+    try {
+      for (var i = 0; i < 24; i++) {
+        final s = await track.getReceiverStats();
+        DebugProbe.log('H', 'livekit_voice_engine:remoteAudio', 'receiver stats', {
+          'who8': identity.padRight(8).substring(0, 8),
+          't': sw.elapsedMilliseconds,
+          'energy': s?.totalAudioEnergy,
+          'concealed': s?.concealedSamples,
+          'silentConcealed': s?.silentConcealedSamples,
+          'jitterDelay': s?.jitterBufferDelay,
+          'received': s?.packetsReceived,
+          'lost': s?.packetsLost,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    } catch (e) {
+      debugPrint('[LK] dbg remote audio sample: $e');
+    }
+  }
+  // #endregion
+
+  // ---------------------------------------------------------- speak warm-up
+  //
+  // Taking a seat used to run four things strictly one after another: wait for
+  // the publish grant (~1.1 s), open the microphone (~1.4 s), publish, then let
+  // the publisher transport do ICE + DTLS for the first time (~1.9 s) — the
+  // listener is only told about the track once that transport is connected.
+  // None of the last three needs the grant to *start*, so they run while the
+  // seat claim and the grant are still in flight, and only the publish itself
+  // waits for the grant.
+
+  lk.LocalAudioTrack? _precapturedMic;
+  Timer? _precaptureExpiry;
+  Future<void>? _precaptureFlight;
+  Future<void>? _warmPublisherFlight;
+
+  /// A captured mic that is never published must not keep the OS microphone
+  /// indicator on, so an unused capture is dropped after this long.
+  static const Duration _precaptureTtl = Duration(seconds: 20);
+
+  /// Connects the publisher transport ahead of the first publish. Safe to call
+  /// repeatedly; failure only means the first publish connects it as before.
+  Future<void> warmPublisher() {
+    final room = _room;
+    if (room == null || !isConnected) return Future<void>.value();
+    return _warmPublisherFlight ??= _warmPublisherNow(room).whenComplete(() {
+      _warmPublisherFlight = null;
+    });
+  }
+
+  Future<void> _warmPublisherNow(lk.Room room) async {
+    final sw = Stopwatch()..start();
+    try {
+      // ignore: invalid_use_of_internal_member
+      await room.engine.ensurePublisherConnected();
+      debugPrint('[LK] publisher warm ms=${sw.elapsedMilliseconds}');
+      // #region agent log
+      DebugProbe.log('F', 'livekit_voice_engine:warmPublisher', 'publisher warmed', {
+        'ms': sw.elapsedMilliseconds,
+      });
+      // #endregion
+    } catch (e) {
+      debugPrint('[LK] publisher warm failed after ${sw.elapsedMilliseconds}ms: $e');
+      // #region agent log
+      DebugProbe.log('F', 'livekit_voice_engine:warmPublisher', 'publisher warm failed', {
+        'ms': sw.elapsedMilliseconds,
+        'error': e.toString(),
+      });
+      // #endregion
+    }
+  }
+
+  /// Opens the microphone now so the later publish does not pay for it.
+  /// Needs the OS microphone permission to be granted already.
+  Future<void> precaptureMic() {
+    final room = _room;
+    if (room == null || !isConnected) return Future<void>.value();
+    final hasMicPublication =
+        room.localParticipant?.getTrackPublicationBySource(lk.TrackSource.microphone) != null;
+    if (hasMicPublication || _precapturedMic != null) return Future<void>.value();
+    return _precaptureFlight ??= _precaptureNow(room).whenComplete(() {
+      _precaptureFlight = null;
+    });
+  }
+
+  Future<void> _precaptureNow(lk.Room room) async {
+    final sw = Stopwatch()..start();
+    lk.LocalAudioTrack? track;
+    try {
+      track = await lk.LocalAudioTrack.create(room.roomOptions.defaultAudioCaptureOptions);
+      await track.start();
+      if (!identical(room, _room)) {
+        await track.stop();
+        return;
+      }
+      _precapturedMic = track;
+      _precaptureExpiry?.cancel();
+      _precaptureExpiry = Timer(_precaptureTtl, () => unawaited(discardPrecapturedMic()));
+      // #region agent log
+      DebugProbe.log('A', 'livekit_voice_engine:precaptureMic', 'mic precaptured', {
+        'ms': sw.elapsedMilliseconds,
+      });
+      // #endregion
+    } catch (e) {
+      debugPrint('[LK] mic precapture failed after ${sw.elapsedMilliseconds}ms: $e');
+      try {
+        await track?.stop();
+      } catch (stopError) {
+        debugPrint('[LK] mic precapture cleanup: $stopError');
+      }
+    }
+  }
+
+  /// Everything the seat claim does not need to wait for: connect the publisher
+  /// transport, open the mic, and once the gateway's early grant lands publish
+  /// the track *muted*. Taking the seat is then an unmute, one signalling
+  /// message, instead of capture + publish + first ICE/DTLS.
+  ///
+  /// Needs the OS microphone permission already. If the grant never arrives the
+  /// capture is dropped by the expiry timer and the normal path still works.
+  Future<void> prepareToSpeak() {
+    final room = _room;
+    if (room == null || !isConnected) return Future<void>.value();
+    return _prepareFlight ??= _prepareNow(room).whenComplete(() {
+      _prepareFlight = null;
+    });
+  }
+
+  Future<void>? _prepareFlight;
+  String? _preparedSid;
+
+  Future<void> _prepareNow(lk.Room room) async {
+    final sw = Stopwatch()..start();
+    await Future.wait<void>(<Future<void>>[warmPublisher(), precaptureMic()]);
+    // #region agent log
+    final dbgWarmCaptureMs = sw.elapsedMilliseconds;
+    // #endregion
+    final granted = await waitForPublishPermission(
+      timeout: const Duration(seconds: 4),
+    );
+    // #region agent log
+    final dbgGrantAtMs = sw.elapsedMilliseconds;
+    // #endregion
+    final local = room.localParticipant;
+    final track = _precapturedMic;
+    if (!granted ||
+        local == null ||
+        track == null ||
+        !identical(room, _room) ||
+        local.getTrackPublicationBySource(lk.TrackSource.microphone) != null) {
+      // #region agent log
+      DebugProbe.log('A', 'livekit_voice_engine:prepareToSpeak', 'prepare skipped publish', {
+        'granted': granted,
+        'hasTrack': track != null,
+        'ms': sw.elapsedMilliseconds,
+      });
+      // #endregion
+      return;
+    }
+    _precapturedMic = null;
+    try {
+      final publication = await local.publishAudioTrack(track);
+      await publication.mute(stopOnMute: false);
+      _preparedSid = publication.sid;
+      _precaptureExpiry?.cancel();
+      _precaptureExpiry = Timer(_precaptureTtl, () => unawaited(discardPrecapturedMic()));
+      // #region agent log
+      DebugProbe.log('A', 'livekit_voice_engine:prepareToSpeak', 'prepared muted publish', {
+        'ms': sw.elapsedMilliseconds,
+        'warmAndCaptureMs': dbgWarmCaptureMs,
+        'grantAtMs': dbgGrantAtMs,
+        'publishMs': sw.elapsedMilliseconds - dbgGrantAtMs,
+      });
+      // #endregion
+    } catch (e) {
+      debugPrint('[LK] prepareToSpeak publish failed: $e');
+      try {
+        await track.stop();
+      } catch (stopError) {
+        debugPrint('[LK] prepareToSpeak cleanup: $stopError');
+      }
+    }
+  }
+
+  /// Drops whatever [prepareToSpeak] set up and the user never used: a mic that
+  /// was captured but not published, or a track published muted for a seat that
+  /// was never taken (claim failed, "Keep Muted", dialog dismissed, timed out).
+  Future<void> discardPrecapturedMic() async {
+    _precaptureExpiry?.cancel();
+    _precaptureExpiry = null;
+    final track = _precapturedMic;
+    _precapturedMic = null;
+    final sid = _preparedSid;
+    _preparedSid = null;
+    if (track != null) {
+      try {
+        await track.stop();
+      } catch (e) {
+        debugPrint('[LK] discard precaptured mic: $e');
+      }
+    }
+    final local = _room?.localParticipant;
+    if (sid != null && local != null) {
+      try {
+        await local.removePublishedTrack(sid);
+      } catch (e) {
+        debugPrint('[LK] discard prepared publish: $e');
+      }
+    }
+  }
+
+  /// Removes the microphone publication entirely. Used when leaving a seat: the
+  /// gateway revokes publish server-side, so the connection stays up and the
+  /// next seat is another prepare + unmute rather than a reconnect.
+  Future<void> unpublishMic() async {
+    await discardPrecapturedMic();
+    final local = _room?.localParticipant;
+    final publication = local?.getTrackPublicationBySource(lk.TrackSource.microphone);
+    if (local == null || publication == null) return;
+    try {
+      await local.removePublishedTrack(publication.sid);
+    } catch (e) {
+      debugPrint('[LK] unpublishMic: $e');
+    }
+  }
+
+  /// Turns the microphone on or off. A precaptured track is published as-is;
+  /// anything else goes through the SDK's own enable/mute path, which also
+  /// covers every later mute and unmute because the publication then exists.
+  Future<void> _setMicOnLocal(lk.LocalParticipant local, bool enabled) async {
+    if (enabled) {
+      final preparing = _prepareFlight;
+      if (preparing != null) await preparing;
+      final inflight = _precaptureFlight;
+      if (inflight != null) await inflight;
+      final prepared = local.getTrackPublicationBySource(lk.TrackSource.microphone);
+      if (prepared != null &&
+          prepared.sid == _preparedSid &&
+          prepared.track?.isActive == true) {
+        // Published muted by prepareToSpeak with the capture still running.
+        _preparedSid = null;
+        _precaptureExpiry?.cancel();
+        _precaptureExpiry = null;
+        await prepared.unmute(stopOnMute: false);
+        return;
+      }
+      final precaptured = _precapturedMic;
+      final alreadyPublished =
+          local.getTrackPublicationBySource(lk.TrackSource.microphone) != null;
+      if (precaptured != null && !alreadyPublished) {
+        _precapturedMic = null;
+        _precaptureExpiry?.cancel();
+        _precaptureExpiry = null;
+        try {
+          await local.publishAudioTrack(precaptured);
+        } catch (_) {
+          try {
+            await precaptured.stop();
+          } catch (stopError) {
+            debugPrint('[LK] precaptured mic cleanup: $stopError');
+          }
+          rethrow;
+        }
+        return;
+      }
+    }
+    await local.setMicrophoneEnabled(enabled);
   }
 
   bool? _sessionPublishing;
@@ -428,7 +874,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
     final deadline = DateTime.now().add(timeout ?? const Duration(seconds: 5));
     while (DateTime.now().isBefore(deadline)) {
       if (canPublishNow) return true;
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
     }
     return canPublishNow;
   }

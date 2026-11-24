@@ -208,6 +208,9 @@ class RoomRealtimeSocket {
           .setAuth({
             'token': token,
             'mtoken': AppConstants.maintenanceBypassToken,
+            // Tells the gateway this build understands open voice tokens (the
+            // microphone grant is in the token; the seat decides who speaks).
+            'voice_cap': 'seat_token',
           })
           .disableReconnection()
           .build(),
@@ -481,6 +484,22 @@ class RoomRealtimeSocket {
       return _emitAck('seat:claim', payload);
     }
     _rememberVoiceSession(payload['roomId'], res);
+    return res;
+  }
+
+  /// True once a gateway has answered `seat:prepare` with `revokes_on_leave`,
+  /// i.e. it takes publish permission back when a user leaves a seat. Only then
+  /// is it safe to stay connected on leave instead of reconnecting as a
+  /// listener; an older gateway never answers, so this stays false.
+  bool gatewayRevokesPublishOnLeave = false;
+
+  /// Asks the gateway to grant publish on the open LiveKit connection for a seat
+  /// the user is about to take, so the publish needs no permission wait later.
+  Future<Map<String, dynamic>?> seatPrepare(Map<String, dynamic> payload) async {
+    final res = await _emitAck('seat:prepare', payload);
+    if (res?['ok'] == true) {
+      gatewayRevokesPublishOnLeave = res?['revokes_on_leave'] == true;
+    }
     return res;
   }
 
