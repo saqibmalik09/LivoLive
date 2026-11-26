@@ -547,13 +547,7 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
     Map<String, dynamic>? msg = giftMessages.isNotEmpty
         ? giftMessages.first
         : null;
-    if (giftMessages.isNotEmpty && mounted) {
-      var added = false;
-      for (final m in giftMessages) {
-        if (_rb._tryAppendChatMessage(m, scroll: false)) added = true;
-      }
-      if (added) _rb._scrollToBottom();
-    }
+    if (mounted) _rb._appendGiftChatMessages(giftMessages);
     for (final m in giftMessages) {
       if (m['type'] == 'gift') {
         _rb._maybeShowLuckyWinFromGiftMessage(m);
@@ -881,6 +875,8 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
 
     final msg = Map<String, dynamic>.from(message);
     msg['room_id'] ??= payload['room_id'] ?? widget.room['id'];
+    // The roll stopped: post the gift's held comment with its multiplier.
+    _rb._settleLuckyGiftComment(msg);
     if (mounted) {
       _rb._tryAppendChatMessage(msg);
     }
@@ -1007,7 +1003,11 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
       return;
     }
 
-    if (_rb._tryAppendChatMessage(newMessage) && type == 'gift') {
+    if (type == 'gift') {
+      // Same funnel as the socket copy: it drops the row when room_gift already
+      // posted this gift, and parks a lucky line until its roll stops.
+      _rb._appendGiftChatMessages([newMessage]);
+
       // Socket room_gift already played FX. Re-triggering from postgres
       // chat inserts made gifts replay late in busy rooms.
       final batchId = metadata is Map
@@ -1020,7 +1020,10 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
         _rb._seenBroadcastEventIds.add('gift_$batchId');
       }
       _rb._triggerGiftAnimation(newMessage);
+      return;
     }
+
+    _rb._tryAppendChatMessage(newMessage);
   }
 
   Future<void> _persistRoomMessage(Map<String, dynamic> row) async {

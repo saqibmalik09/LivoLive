@@ -354,8 +354,18 @@ class _PagedGiftGridState extends State<PagedGiftGrid> {
                             alignment: Alignment.center,
                             width: double.infinity,
                             height: double.infinity,
-                            transformWidth: 256,
-                            transformHeight: 256,
+                            // Tiles are ~80 logical px; 256 was 4x too large and
+                            // the fade made every icon pop in late after decode.
+                            transformWidth: 128,
+                            transformHeight: 128,
+                            transformResize: 'contain',
+                            transformQuality: 75,
+                            memCacheWidth: 160,
+                            memCacheHeight: 160,
+                            fadeInDuration: Duration.zero,
+                            fadeOutDuration: Duration.zero,
+                            gaplessPlayback: true,
+                            placeholder: (_, __) => const SizedBox.shrink(),
                           )
                         : const Icon(
                             Icons.card_giftcard,

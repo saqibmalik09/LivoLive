@@ -1031,6 +1031,20 @@ async function loadSnapshot(roomId) {
   ]);
   let seats = cachedSeats;
   let meta = cachedMeta;
+  if (!seats || !meta) {
+    // Cold room. The app asks for a snapshot as the room screen is created and
+    // sends room:join a frame later, so both arrive while the cache is still
+    // empty. Each used to read seats, seat wear and room meta from Postgres on
+    // its own. Going through the shared warm makes that one load; the direct
+    // reads below remain only as the fallback if the warm did not fill it.
+    await warmRoomCaches(roomId);
+    const [warmSeats, warmMeta] = await Promise.all([
+      seats ? seats : state.getSeatsSnapshot(pubClient, roomId).catch(() => null),
+      meta ? meta : state.getMetaSnapshot(pubClient, roomId).catch(() => null),
+    ]);
+    seats = warmSeats;
+    meta = warmMeta;
+  }
   const pending = [];
   if (!seats) {
     pending.push(
@@ -1922,9 +1936,16 @@ io.on("connection", (socket) => {
     })();
   }
   socket.on("room:join", async (payload = {}, ack) => {
+    const joinT0 = Date.now();
     try {
       const roomId = String(payload.roomId || "").trim();
       if (!roomId) return ackErr(ack, "roomId required");
+
+      // Start filling the seat and meta caches before the kick lookup rather
+      // than after it, so on a cold room the Postgres reads overlap instead of
+      // queueing behind each other. It only fills a cache and never throws, so
+      // running it for a user who turns out to be kicked costs nothing.
+      const cachesWarm = warmRoomCaches(roomId);
 
       const kickUserId = String(
         (payload.user && payload.user.id) || socket.data.userId || "",
@@ -1939,6 +1960,7 @@ io.on("connection", (socket) => {
           console.warn("[room:join] kick check failed:", err.message);
         }
       }
+      const joinKickMs = Date.now() - joinT0;
 
       const prevSocketRoom = String(socket.data.roomId || "").trim();
       if (prevSocketRoom && prevSocketRoom !== roomId) {
@@ -1983,14 +2005,14 @@ io.on("connection", (socket) => {
       }
       user.id = socket.data.userId;
       emitCachedSeats(socket, roomId);
-      // Warm the seat and meta caches alongside the presence bookkeeping. On a
-      // cold Redis both of these read Postgres, and that read used to start
-      // only after three awaited presence writes had finished — which is where
-      // a first join into an idle room lost most of its seconds. buildSnapshot
-      // below still runs after presenceJoin so the snapshot's presence list
-      // includes the joiner; by then these reads have already landed in Redis,
-      // so it is a cache hit and the snapshot contents are unchanged.
-      const cachesWarm = warmRoomCaches(roomId);
+      // The cache warm started at the top of this handler runs alongside the
+      // presence bookkeeping below. On a cold Redis it reads Postgres, and that
+      // read used to start only after three awaited presence writes had
+      // finished — which is where a first join into an idle room lost most of
+      // its seconds. buildSnapshot still runs after presenceJoin so the
+      // snapshot's presence list includes the joiner; by then the warm has
+      // landed in Redis, so it is a cache hit and the contents are unchanged.
+      const joinPresenceT0 = Date.now();
       if (prevSocketRoom && prevSocketRoom !== roomId) {
         await vacateUserFromRoom(
           prevSocketRoom,
@@ -2009,10 +2031,13 @@ io.on("connection", (socket) => {
             ? ` (left ${prevSocketRoom})`
             : ""),
       );
+      const joinPresenceMs = Date.now() - joinPresenceT0;
+      const joinSnapshotT0 = Date.now();
       await cachesWarm;
       const snapshot = await buildSnapshot(roomId);
       bumpSeatEmit(socket);
       socket.emit("room:snapshot", { room_id: roomId, ...snapshot });
+      const joinSnapshotMs = Date.now() - joinSnapshotT0;
       const joinPayload = {
         event_id: payload.event_id || uuidv4(),
         room_id: roomId,
@@ -2046,6 +2071,14 @@ io.on("connection", (socket) => {
         seq: snapshot.seq,
         ...(voice ? { voice: voice } : {}),
       });
+      // One line per join with where the time went, so a slow room open can be
+      // traced to a stage: kick is the ban lookup, presence is leaving other
+      // rooms plus the presence writes, snapshot is the cache fill and read.
+      console.log(
+        `[room:join] ok room=${roomId} kick=${joinKickMs}ms ` +
+          `presence=${joinPresenceMs}ms snapshot=${joinSnapshotMs}ms ` +
+          `total=${Date.now() - joinT0}ms`,
+      );
       // Durable membership bookkeeping runs after the joiner already has their
       // snapshot. It used to sit in front of the snapshot, so every join waited
       // on a room read, a member upsert and a presence RPC before one seat
@@ -2684,7 +2717,8 @@ io.on("connection", (socket) => {
   socket.on("gift:notify", (payload = {}, ack) => {
     processGiftNotify(socket, payload, ack);
   });
-  async function handleGiftSend(payload = {}, ack) {
+  async function handleGiftSend(payload = {}, ack, queuedAt = Date.now()) {
+    const startedAt = Date.now();
     try {
       const roomId = String(payload.roomId || payload.room_id || "").trim();
       const giftId = String(payload.gift_id || payload.giftId || "").trim();
@@ -2750,6 +2784,7 @@ io.on("connection", (socket) => {
       // while the whole room waited. One socket call settles next to Postgres
       // and broadcasts before the ack. Lucky rolls stay safe: they are gated on
       // the is_lucky metadata the SQL returns, not on reaching this handler.
+      const settleT0 = Date.now();
       const settle = await giftSettle.settleGifts({
         senderId: socket.data.userId,
         receiverIds: targetIds,
@@ -2757,6 +2792,7 @@ io.on("connection", (socket) => {
         roomId: roomId,
         quantity: quantity,
       });
+      const settleMs = Date.now() - settleT0;
       if (!settle.success) {
         await pubClient.del(`gift:send:done:${clientOpId}`);
         return ackErr(ack, settle.message || "Failed to send gift");
@@ -2783,10 +2819,14 @@ io.on("connection", (socket) => {
       giftSettle
         .persistGiftMessages(built.notifyPayload.messages)
         .catch(() => {});
+      // queue = waiting behind this sender's earlier gifts, settle = the
+      // send_gift(s) SQL, pre = idempotency claim + gift lookup + build.
       console.log(
         `[gift] send room=${roomId} from=${socket.data.userId} ` +
           `targets=${built.successfulTargets.length} ` +
-          `batch=${animationBatchId} op=${clientOpId}`,
+          `batch=${animationBatchId} op=${clientOpId} ` +
+          `queue=${startedAt - queuedAt}ms settle=${settleMs}ms ` +
+          `pre=${Date.now() - startedAt - settleMs}ms`,
       );
       await processGiftNotify(
         socket,
@@ -2822,8 +2862,11 @@ io.on("connection", (socket) => {
       return ackErr(ack, "Too many gifts at once - please wait a moment");
     }
     giftGlobalInflight += 1;
+    const queuedAt = Date.now();
     giftSendQueue
-      .run(socket.data.userId || socket.id, () => handleGiftSend(payload, ack))
+      .run(socket.data.userId || socket.id, () =>
+        handleGiftSend(payload, ack, queuedAt),
+      )
       .catch((err) => {
         if (err && err.code === "QUEUE_FULL") {
           ackErr(ack, "Too many gifts at once - please wait a moment");

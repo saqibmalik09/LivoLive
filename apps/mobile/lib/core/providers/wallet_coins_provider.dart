@@ -5,21 +5,23 @@ import 'package:sk_live/core/providers/auth_provider.dart';
 /// after every send (that flashes loading for seconds under gift storms).
 final walletCoinsOverrideProvider = StateProvider<int?>((ref) => null);
 
-int resolveWalletCoins(dynamic ref, Map<String, dynamic>? profile) {
+// `ref` must stay statically typed: `valueOrNull` is an extension getter and
+// is not found through `dynamic`, which made every gift-sheet send throw.
+int resolveWalletCoins(WidgetRef ref, Map<String, dynamic>? profile) {
   final override = ref.read(walletCoinsOverrideProvider);
   if (override != null) return override;
   return (profile?['coins'] as num?)?.toInt() ?? 0;
 }
 
-void applyOptimisticCoinSpend(dynamic ref, int cost) {
+void applyOptimisticCoinSpend(WidgetRef ref, int cost) {
   if (cost <= 0) return;
   final profile = ref.read(userProfileProvider).valueOrNull;
   final current = resolveWalletCoins(ref, profile);
-  ref.read(walletCoinsOverrideProvider.notifier).state =
-      (current - cost).clamp(0, 1 << 62);
+  final next = current - cost;
+  ref.read(walletCoinsOverrideProvider.notifier).state = next < 0 ? 0 : next;
 }
 
-void refundOptimisticCoinSpend(dynamic ref, int cost) {
+void refundOptimisticCoinSpend(WidgetRef ref, int cost) {
   if (cost <= 0) return;
   final profile = ref.read(userProfileProvider).valueOrNull;
   final current = resolveWalletCoins(ref, profile);
@@ -27,7 +29,7 @@ void refundOptimisticCoinSpend(dynamic ref, int cost) {
 }
 
 void syncWalletCoinsOverrideFromProfile(
-  dynamic ref,
+  WidgetRef ref,
   Map<String, dynamic>? profile,
 ) {
   final override = ref.read(walletCoinsOverrideProvider);
@@ -45,7 +47,7 @@ void syncWalletCoinsOverrideFromProfile(
 /// Call when opening the gift sheet so a previous room's override cannot
 /// block sends with a fake 0 balance.
 void clearStaleWalletOverrideForGiftSheet(
-  dynamic ref,
+  WidgetRef ref,
   Map<String, dynamic>? profile,
 ) {
   final override = ref.read(walletCoinsOverrideProvider);

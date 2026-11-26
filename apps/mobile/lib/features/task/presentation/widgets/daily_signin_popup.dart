@@ -432,6 +432,8 @@ class _RewardIcon extends StatelessWidget {
           url,
           width: 28,
           height: 28,
+          // 7 icons decoded at icon size, not full upload size.
+          cacheWidth: 96,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => _fallback(),
         ),

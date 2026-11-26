@@ -160,6 +160,8 @@ Future<void> openRoomLive(
     _markRoomUnlocked(roomId);
   }
   if (!context.mounted) return;
+  // Backdrop decode starts on the tap, in parallel with the route push.
+  precacheRoomBackground(context, room['background_url']?.toString());
 
   final route = PageRouteBuilder<void>(
     pageBuilder: (_, _, _) => ColoredBox(

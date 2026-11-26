@@ -125,6 +125,9 @@ class RankingRoomPromoPopup extends StatelessWidget {
                               CachedNetworkImage(
                                 imageUrl: promo.imageUrl!,
                                 fit: BoxFit.cover,
+                                // Decode at card size, not the upload's.
+                                memCacheWidth: 720,
+                                fadeInDuration: const Duration(milliseconds: 120),
                                 errorWidget: (_, _, _) => _coverFallback(),
                               )
                             else

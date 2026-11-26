@@ -47,7 +47,7 @@ class _ChatGiftSheetState extends ConsumerState<ChatGiftSheet>
 
   @override
   Widget build(BuildContext context) {
-    final categoriesAsync = ref.watch(giftCategoriesProvider);
+    final catalogAsync = ref.watch(giftCatalogProvider);
     final userProfile = ref.watch(userProfileProvider).value;
     final coins = (userProfile?['coins'] as num?)?.toInt() ?? 0;
 
@@ -62,10 +62,12 @@ class _ChatGiftSheetState extends ConsumerState<ChatGiftSheet>
           const SizedBox(height: 8),
           _buildTargetUserInfo(),
           const Divider(color: Colors.white10, height: 1),
-          categoriesAsync.when(
-            data: (categories) {
+          catalogAsync.when(
+            data: (catalog) {
+              final categories = catalog.categories;
               if (_selectedCategoryId == null && categories.isNotEmpty) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted || _selectedCategoryId != null) return;
                   setState(() => _selectedCategoryId = categories[0].id);
                 });
               }
@@ -120,8 +122,8 @@ class _ChatGiftSheetState extends ConsumerState<ChatGiftSheet>
             EventGiftMarkerLegend(
               kinds: ref.watch(activeEventGiftMarkerKindsProvider),
             ),
-          categoriesAsync.when(
-            data: (categories) => _buildGiftPager(categories),
+          catalogAsync.when(
+            data: (catalog) => _buildGiftPager(catalog),
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: CircularProgressIndicator(color: Colors.amber),
@@ -137,7 +139,8 @@ class _ChatGiftSheetState extends ConsumerState<ChatGiftSheet>
     );
   }
 
-  Widget _buildGiftPager(List<ShopCategory> categories) {
+  Widget _buildGiftPager(GiftCatalog catalog) {
+    final categories = catalog.categories;
     if (categories.isEmpty) {
       return Center(
         child: Text(
@@ -147,17 +150,7 @@ class _ChatGiftSheetState extends ConsumerState<ChatGiftSheet>
       );
     }
 
-    final giftsByCategory = <String, List<ShopItem>>{};
-    for (final cat in categories) {
-      final itemsAsync = ref.watch(giftItemsProvider(cat.id));
-      if (!itemsAsync.hasValue) {
-        return const Center(
-          child: CircularProgressIndicator(color: Colors.amber),
-        );
-      }
-      giftsByCategory[cat.id] = itemsAsync.value!;
-    }
-
+    final giftsByCategory = catalog.giftsByCategory;
     final categoryIds = categories.map((c) => c.id).toList();
     final eventMarkers = ref.watch(activeEventGiftMarkersProvider);
 

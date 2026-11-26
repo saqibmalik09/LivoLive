@@ -86,20 +86,28 @@ class _MainScreenState extends ConsumerState<MainScreen>
     } catch (_) {}
   }
 
+  /// Launch popups wait for home to settle (first feed, images, socket) so a
+  /// dialog animation never competes with the first frames — on a new
+  /// account that overlap was the lag. At most ONE popup per launch: the
+  /// daily sign-in wins; the ranking promo waits for a launch without it.
+  static const _launchPopupSettle = Duration(milliseconds: 2200);
+
+  bool get _homeIsTopRoute => ModalRoute.of(context)?.isCurrent ?? true;
+
   Future<void> _runLaunchPopups() async {
     if (_dailySignInPrompted || !mounted) return;
     _dailySignInPrompted = true;
+    await Future<void>.delayed(_launchPopupSettle);
+    if (!mounted || !_homeIsTopRoute) return;
     final dailyShown = await _maybeShowDailySignIn();
-    if (!mounted) return;
-    await _maybeShowRankingRoomPromos(afterDaily: dailyShown);
+    if (!mounted || dailyShown) return;
+    await _maybeShowRankingRoomPromos(afterDaily: false);
   }
 
   Future<bool> _maybeShowDailySignIn() async {
     try {
       final show = await DailySignInService.shouldShowPopup();
-      if (!show || !mounted) return false;
-      await Future<void>.delayed(const Duration(milliseconds: 650));
-      if (!mounted) return false;
+      if (!show || !mounted || !_homeIsTopRoute) return false;
       final summary = await DailySignInService.fetchSummary();
       if (!mounted || summary == null || summary.days.isEmpty) return false;
       await DailySignInPopup.show(
@@ -139,12 +147,13 @@ class _MainScreenState extends ConsumerState<MainScreen>
         return;
       }
 
-      await Future<void>.delayed(
-        Duration(milliseconds: afterDaily ? 380 : 700),
-      );
-      if (!mounted) return;
+      if (afterDaily) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
+      if (!mounted || !_homeIsTopRoute) return;
 
-      for (final promo in promos) {
+      // One promo per day, not a chain of dialogs to dismiss one by one.
+      for (final promo in promos.take(1)) {
         if (!mounted) return;
         final entered = await RankingRoomPromoPopup.show(
           context,

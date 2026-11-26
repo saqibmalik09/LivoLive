@@ -224,7 +224,7 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
     ) {
       syncWalletCoinsOverrideFromProfile(ref, next.valueOrNull);
     });
-    final categoriesAsync = ref.watch(giftCategoriesProvider);
+    final catalogAsync = ref.watch(giftCatalogProvider);
     final userProfile = ref.watch(userProfileProvider).value;
     ref.watch(walletCoinsOverrideProvider);
     final coins = resolveWalletCoins(ref, userProfile);
@@ -241,13 +241,14 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
           const SizedBox(height: 6),
           _buildMemberSelection(allMembers),
           const Divider(color: Colors.white10, height: 1),
-          categoriesAsync.when(
-            data: (categories) {
-              final filteredCategories = categories;
+          catalogAsync.when(
+            data: (catalog) {
+              final filteredCategories = catalog.categories;
 
               if (_selectedCategoryId == null &&
                   filteredCategories.isNotEmpty) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted || _selectedCategoryId != null) return;
                   setState(
                     () => _selectedCategoryId = filteredCategories[0].id,
                   );
@@ -319,8 +320,8 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
             EventGiftMarkerLegend(
               kinds: ref.watch(activeEventGiftMarkerKindsProvider),
             ),
-          categoriesAsync.when(
-            data: (categories) => _buildGiftPager(categories),
+          catalogAsync.when(
+            data: (catalog) => _buildGiftPager(catalog),
             loading: () => _buildGiftAreaSlot(
               const Center(
                 child: CircularProgressIndicator(color: Colors.amber),
@@ -349,7 +350,8 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
     return SizedBox(height: height, width: double.infinity, child: child);
   }
 
-  Widget _buildGiftPager(List<ShopCategory> categories) {
+  Widget _buildGiftPager(GiftCatalog catalog) {
+    final categories = catalog.categories;
     if (categories.isEmpty) {
       return _buildGiftAreaSlot(
         Center(
@@ -361,17 +363,10 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
       );
     }
 
-    final giftsByCategory = <String, List<ShopItem>>{};
-    for (final cat in categories) {
-      final itemsAsync = ref.watch(giftItemsProvider(cat.id));
-      if (!itemsAsync.hasValue) {
-        return _buildGiftAreaSlot(
-          const Center(child: CircularProgressIndicator(color: Colors.amber)),
-        );
-      }
-      giftsByCategory[cat.id] = itemsAsync.value!;
-    }
-
+    // One catalog fetch already holds every category. The old path watched a
+    // separate FutureProvider per tab and kept the spinner up until the last
+    // one finished — that is why the grid stayed empty for so long.
+    final giftsByCategory = catalog.giftsByCategory;
     final categoryIds = categories.map((c) => c.id).toList();
     final eventMarkers = ref.watch(activeEventGiftMarkersProvider);
 
@@ -397,8 +392,10 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
             'is_full_screen': gift.isFullScreen,
           },
         );
+        // Every gift with an animation plays it on send (full screen, or in
+        // the centre before the flight), so warm it while the user picks.
         final svga = gift.svgaUrl?.trim() ?? '';
-        if (gift.isFullScreen && svga.isNotEmpty) {
+        if (svga.isNotEmpty) {
           unawaited(SvgaCache.preload([svga]));
         }
       },

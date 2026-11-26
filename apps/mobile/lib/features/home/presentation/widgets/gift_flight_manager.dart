@@ -3,6 +3,9 @@ import 'dart:math';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/widgets/svga_player.dart';
 
 class GiftFlightRequest {
   final String? dedupeKey;
@@ -14,6 +17,15 @@ class GiftFlightRequest {
   final String svgaUrl;
   final Offset Function(String userId) resolveOffset;
 
+  /// Pop the gift in the middle of the screen and hold it there before it
+  /// flies to the receivers. A gift sent quickly after the previous one from
+  /// the same [comboKey] skips the hold and flies straight away.
+  final bool holdAtCenter;
+
+  /// Who is sending, for telling a fast combo apart from a fresh gift.
+  /// [senderId] is only the spawn point and is shared by every sender.
+  final String comboKey;
+
   const GiftFlightRequest({
     this.dedupeKey,
     required this.senderId,
@@ -23,6 +35,8 @@ class GiftFlightRequest {
     this.isFullScreen = false,
     this.svgaUrl = '',
     required this.resolveOffset,
+    this.holdAtCenter = false,
+    this.comboKey = '',
   });
 }
 
@@ -90,11 +104,30 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   /// Soft cap on cached gift icon providers for a long room session.
   static const int _maxImageCacheEntries = 32;
 
+  /// Centre-hold timeline: pop in, sit in the middle, then fly to the seat.
+  static const int _heroPopMs = 240;
+  static const int _heroHoldMs = 2600;
+  static const int _heroFlyMs = 650;
+  static const double _heroScale = 1.9;
+
+  /// A gift from the same sender inside this gap is a combo: it skips the
+  /// hold so fast tapping keeps flying fast.
+  static const int _comboGapMs = 1200;
+
+  /// A new sender's gift takes the centre, but the one already there keeps
+  /// it for at least this long first.
+  static const int _heroMinHoldMs = 900;
+
+  /// Past this many icons on screen a storm is going on; everything flies
+  /// direct instead of queueing up in the middle.
+  static const int _heroMaxActive = 16;
+
   final Map<String, List<_RunnableBatch>> _chainQueues = {};
   final Map<String, Timer> _chainTimers = {};
   final List<_ActiveSingle> _activeSingles = [];
   final Set<String> _playedDedupeKeys = {};
   final Map<String, ImageProvider> _imageCache = {};
+  final Map<String, int> _lastGiftAtMs = {};
   bool _rebuildScheduled = false;
 
   int get activeFlightCount => _activeSingles.length;
@@ -113,6 +146,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     }
     _chainTimers.clear();
     for (final f in _activeSingles) {
+      f.releaseTimer?.cancel();
       f.controller.dispose();
     }
     _activeSingles.clear();
@@ -136,6 +170,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     }
     _chainTimers.clear();
     for (final flight in _activeSingles) {
+      flight.releaseTimer?.cancel();
       flight.controller.stop();
       flight.controller.dispose();
     }
@@ -180,8 +215,26 @@ class GiftFlightManagerState extends State<GiftFlightManager>
         ? request.dedupeKey!
         : 'chain_${_chainSeq++}';
 
+    // Claimed before the frame, not inside the callback below: the socket echo
+    // and the postgres insert of one gift land in the same frame, and marking
+    // late let both of them queue a batch — the room saw the gift fly twice.
+    if (request.dedupeKey != null && request.dedupeKey!.isNotEmpty) {
+      markPlayed(request.dedupeKey!);
+    }
+
+    final isCombo = _noteGiftAndCheckCombo(request.comboKey);
+    if (isCombo) _releaseHeldHeroes(comboKey: request.comboKey);
+    final hold =
+        request.holdAtCenter &&
+        !isCombo &&
+        _activeSingles.length < _heroMaxActive;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (hold) {
+        _startHero(request, chainId);
+        return;
+      }
       final start = request.resolveOffset(request.senderId);
       final qty = request.quantity.clamp(1, 9999);
       final durationMs = _waveFlightMs(qty);
@@ -207,14 +260,98 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       }
 
       if (waves.isEmpty) return;
-      // Mark only once waves are actually queued — if we marked earlier and
-      // then dropped at the active-flight cap, the batch never replayed.
-      if (request.dedupeKey != null && request.dedupeKey!.isNotEmpty) {
-        markPlayed(request.dedupeKey!);
-      }
       _chainQueues.putIfAbsent(chainId, () => []).addAll(waves);
       _pumpChain(chainId);
     });
+  }
+
+  /// Records this gift's time for [comboKey] and says whether it follows the
+  /// sender's previous gift closely enough to count as a combo tap.
+  bool _noteGiftAndCheckCombo(String comboKey) {
+    if (comboKey.isEmpty) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastGiftAtMs.remove(comboKey);
+    _lastGiftAtMs[comboKey] = now;
+    if (_lastGiftAtMs.length > 64) {
+      _lastGiftAtMs.remove(_lastGiftAtMs.keys.first);
+    }
+    return last != null && now - last < _comboGapMs;
+  }
+
+  /// Sends gifts still sitting in the centre on to their seats: all of them
+  /// for a fresh gift taking the centre (after [_heroMinHoldMs]), or right
+  /// away for the sender's own combo.
+  void _releaseHeldHeroes({String? comboKey}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final flight in _activeSingles) {
+      final hero = flight.hero;
+      if (hero == null || flight.releaseTimer != null) continue;
+      if (flight.controller.value >= hero.holdEnd) continue;
+      if (comboKey != null) {
+        if (hero.comboKey != comboKey) continue;
+        _flyHeroNow(flight);
+        continue;
+      }
+      final heldMs = now - hero.startedAtMs;
+      final waitMs = _heroPopMs + _heroMinHoldMs - heldMs;
+      if (waitMs <= 0) {
+        _flyHeroNow(flight);
+      } else {
+        flight.releaseTimer = Timer(Duration(milliseconds: waitMs), () {
+          flight.releaseTimer = null;
+          if (!mounted || !_activeSingles.contains(flight)) return;
+          _flyHeroNow(flight);
+        });
+      }
+    }
+  }
+
+  void _flyHeroNow(_ActiveSingle flight) {
+    final hero = flight.hero;
+    if (hero == null) return;
+    flight.releaseTimer?.cancel();
+    flight.releaseTimer = null;
+    if (flight.controller.value >= hero.holdEnd) return;
+    flight.controller.forward(from: hero.holdEnd);
+  }
+
+  /// One icon per receiver, all starting together in the centre; only the
+  /// first is drawn until they split up for the flight.
+  void _startHero(GiftFlightRequest request, String chainId) {
+    if (_activeSingles.length >= _maxActiveFlights) return;
+    _releaseHeldHeroes();
+    final box = context.findRenderObject() as RenderBox?;
+    final size = (box != null && box.hasSize)
+        ? box.size
+        : MediaQuery.sizeOf(context);
+    final center = Offset(size.width / 2, size.height * 0.42);
+    const totalMs = _heroPopMs + _heroHoldMs + _heroFlyMs;
+    final startedAt = DateTime.now().millisecondsSinceEpoch;
+    final qty = request.quantity.clamp(1, 9999);
+    var index = 0;
+    for (final targetId in request.targetIds) {
+      if (_activeSingles.length >= _maxActiveFlights) break;
+      _startSingle(
+        _SinglePending(
+          start: center,
+          end: request.resolveOffset(targetId),
+          imageUrl: request.imageUrl,
+          durationMs: totalMs,
+        ),
+        chainId,
+        hero: _HeroTiming(
+          comboKey: request.comboKey,
+          popEnd: _heroPopMs / totalMs,
+          holdEnd: (_heroPopMs + _heroHoldMs) / totalMs,
+          startedAtMs: startedAt,
+          drawWhileHeld: index == 0,
+          quantity: qty,
+          svgaUrl: request.svgaUrl.trim(),
+        ),
+      );
+      index++;
+    }
+    _scheduleRebuild();
   }
 
   int _waveFlightMs(int totalQuantity) {
@@ -268,7 +405,11 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     if (batch.items.isNotEmpty) _scheduleRebuild();
   }
 
-  void _startSingle(_SinglePending pending, String chainId) {
+  void _startSingle(
+    _SinglePending pending,
+    String chainId, {
+    _HeroTiming? hero,
+  }) {
     final controller = AnimationController(
       vsync: this,
       duration: Duration(milliseconds: pending.durationMs),
@@ -278,9 +419,16 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       pending: pending,
       controller: controller,
       chainId: chainId,
+      hero: hero,
     );
     _activeSingles.add(flight);
-    controller.forward().whenComplete(() {
+    // A status listener, not forward().whenComplete: releasing a held gift
+    // restarts the controller with forward(from:), which cancels the first
+    // ticker future so it never completes.
+    controller.addStatusListener((status) {
+      if (status != AnimationStatus.completed) return;
+      flight.releaseTimer?.cancel();
+      flight.releaseTimer = null;
       if (!mounted) {
         controller.dispose();
         return;
@@ -289,6 +437,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       controller.dispose();
       _scheduleRebuild();
     });
+    controller.forward();
   }
 
   void _scheduleRebuild() {
@@ -306,7 +455,23 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     if (_imageCache.length >= _maxImageCacheEntries) {
       _imageCache.remove(_imageCache.keys.first);
     }
-    final provider = CachedNetworkImageProvider(url);
+    // Same rendered URL and cache the gift grid and the catalog prefetch use,
+    // so the icon is usually already on disk. The raw URL on the default cache
+    // re-downloaded the full-size file, and a flight that ended before it
+    // arrived showed nothing at all.
+    final rendered =
+        SupabaseImageTransform.url(
+          url,
+          width: 128,
+          height: 128,
+          resize: 'contain',
+          quality: 75,
+        ) ??
+        url;
+    final provider = CachedNetworkImageProvider(
+      rendered,
+      cacheManager: AppImageCache.manager,
+    );
     _imageCache[url] = provider;
     return provider;
   }
@@ -377,6 +542,88 @@ class _GiftFlightPaint extends StatelessWidget {
     return appear * _seatEnterOpacity(rawT);
   }
 
+  static const TextStyle _heroQtyStyle = TextStyle(
+    color: Colors.white,
+    fontSize: 20,
+    fontWeight: FontWeight.w900,
+    height: 1,
+    shadows: [
+      Shadow(color: Colors.black87, offset: Offset(0, 1.5), blurRadius: 2),
+    ],
+  );
+
+  Widget _buildHero(_HeroTiming hero, Widget icon) {
+    const heroScale = GiftFlightManagerState._heroScale;
+    final pending = flight.pending;
+    final v = flight.controller.value.clamp(0.0, 1.0);
+
+    if (v < hero.holdEnd) {
+      if (!hero.drawWhileHeld) return const SizedBox.shrink();
+      final popT = hero.popEnd <= 0
+          ? 1.0
+          : (v / hero.popEnd).clamp(0.0, 1.0);
+      final scale = heroScale * Curves.easeOutBack.transform(popT);
+      return Positioned(
+        left: pending.start.dx - iconHalf,
+        top: pending.start.dy - iconHalf,
+        child: Opacity(
+          opacity: Curves.easeOut.transform(popT),
+          child: SizedBox(
+            width: iconSize,
+            height: iconSize,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                Transform.scale(
+                  scale: scale,
+                  filterQuality: FilterQuality.low,
+                  child: hero.svgaUrl.isEmpty
+                      ? icon
+                      : _HeroAnimatedIcon(
+                          svgaUrl: hero.svgaUrl,
+                          icon: icon,
+                          size: iconSize * 1.5,
+                        ),
+                ),
+                if (hero.quantity > 1)
+                  Positioned(
+                    top: iconHalf + iconHalf * heroScale + 4,
+                    left: -48,
+                    right: -48,
+                    child: Center(
+                      child: Text('x${hero.quantity}', style: _heroQtyStyle),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final flyT = hero.holdEnd >= 1
+        ? 1.0
+        : ((v - hero.holdEnd) / (1 - hero.holdEnd)).clamp(0.0, 1.0);
+    if (flyT >= 1.0) return const SizedBox.shrink();
+    final eased = Curves.easeInOut.transform(flyT);
+    final pos = Offset.lerp(pending.start, pending.end, eased)!;
+    final scale =
+        (heroScale + (1.0 - heroScale) * eased) * _seatEnterScale(flyT);
+    return Positioned(
+      left: pos.dx - iconHalf,
+      top: pos.dy - iconHalf,
+      child: Opacity(
+        opacity: _seatEnterOpacity(flyT),
+        child: Transform.scale(
+          scale: scale,
+          filterQuality: FilterQuality.low,
+          child: icon,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pending = flight.pending;
@@ -393,6 +640,8 @@ class _GiftFlightPaint extends StatelessWidget {
             const Icon(Icons.card_giftcard, color: Colors.amber, size: 44),
       ),
       builder: (context, child) {
+        final hero = flight.hero;
+        if (hero != null) return _buildHero(hero, child!);
         final rawT = Curves.easeOut.transform(
           flight.controller.value.clamp(0.0, 1.0),
         );
@@ -445,9 +694,88 @@ class _ActiveSingle {
   final AnimationController controller;
   final String chainId;
 
-  const _ActiveSingle({
+  /// Set for a centre-hold flight, null for a direct one.
+  final _HeroTiming? hero;
+
+  /// Pending hand-off from the centre once a newer gift claims it.
+  Timer? releaseTimer;
+
+  _ActiveSingle({
     required this.pending,
     required this.controller,
     required this.chainId,
+    this.hero,
   });
+}
+
+/// Phase boundaries of a centre-hold flight, as fractions of its controller.
+class _HeroTiming {
+  final String comboKey;
+  final double popEnd;
+  final double holdEnd;
+  final int startedAtMs;
+  final bool drawWhileHeld;
+  final int quantity;
+
+  /// The gift's animation, played in the centre instead of the still icon.
+  final String svgaUrl;
+
+  const _HeroTiming({
+    required this.comboKey,
+    required this.popEnd,
+    required this.holdEnd,
+    required this.startedAtMs,
+    required this.drawWhileHeld,
+    required this.quantity,
+    this.svgaUrl = '',
+  });
+}
+
+/// The centre preview of a gift that has an animation: the still icon until
+/// the SVGA has decoded (first send of a gift downloads it), then the SVGA.
+/// A failed decode leaves the icon up.
+class _HeroAnimatedIcon extends StatefulWidget {
+  final String svgaUrl;
+  final Widget icon;
+  final double size;
+
+  const _HeroAnimatedIcon({
+    required this.svgaUrl,
+    required this.icon,
+    required this.size,
+  });
+
+  @override
+  State<_HeroAnimatedIcon> createState() => _HeroAnimatedIconState();
+}
+
+class _HeroAnimatedIconState extends State<_HeroAnimatedIcon> {
+  bool _loaded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        if (!_loaded) widget.icon,
+        OverflowBox(
+          maxWidth: widget.size,
+          maxHeight: widget.size,
+          child: SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: RaveSVGAPlayer(
+              resUrl: widget.svgaUrl,
+              fit: BoxFit.contain,
+              repeat: true,
+              onLoaded: () {
+                if (mounted && !_loaded) setState(() => _loaded = true);
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

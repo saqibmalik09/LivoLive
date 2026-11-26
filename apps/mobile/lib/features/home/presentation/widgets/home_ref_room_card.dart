@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
 import 'package:sk_live/core/util/room_cover_cache.dart';
 import 'package:sk_live/core/widgets/app_network_image.dart';
+import 'package:sk_live/core/widgets/room_background_media.dart';
 
 class HomeRefRoomCard extends StatelessWidget {
   const HomeRefRoomCard({
@@ -38,6 +39,7 @@ class HomeRefRoomCard extends StatelessWidget {
     final hostAvatar = room['host_avatar']?.toString() ?? '';
     final cover = room['image_url']?.toString() ?? '';
     final online = (room['online_users_count'] as num?)?.toInt() ?? 0;
+    warmRoomBackgroundToDisk(context, room['background_url']?.toString());
     final pillText = TextStyle(
       color: Colors.white,
       fontSize: 22 * s,

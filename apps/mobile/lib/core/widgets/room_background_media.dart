@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:collection';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/core/util/app_image_cache.dart';
@@ -74,14 +77,13 @@ class RoomBackgroundMedia extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final decodePx = _backgroundCachePx(context);
+    final decodePx = roomBackgroundCachePx(context);
     // The room background was the one image in the app loaded at its source
     // resolution: a host can upload a 6000px photo, and the full multi-MB file
     // was downloaded on every room entry. memCacheWidth below only bounds the
     // decode, not the transfer. Asking Supabase to render it at the width we
     // are about to decode to turns that into a webp of a few hundred KB.
-    final imageUrl =
-        SupabaseImageTransform.url(url, width: decodePx, quality: 80) ?? url;
+    final imageUrl = _roomBackgroundImageUrl(url, decodePx);
     final media = MediaUrlUtil.isSvgaUrl(url)
         ? RaveSVGAPlayer(resUrl: url, fit: fit, repeat: true)
         : CachedNetworkImage(
@@ -111,8 +113,52 @@ class RoomBackgroundMedia extends StatelessWidget {
   }
 }
 
-int _backgroundCachePx(BuildContext context) {
+int roomBackgroundCachePx(BuildContext context) {
   final width = MediaQuery.sizeOf(context).width;
   final dpr = MediaQuery.devicePixelRatioOf(context);
   return (width * dpr).round().clamp(720, 1440);
+}
+
+String _roomBackgroundImageUrl(String url, int decodePx) =>
+    SupabaseImageTransform.url(url, width: decodePx, quality: 80) ?? url;
+
+/// Rendered backdrop URLs already warmed this session (bounded).
+final LinkedHashSet<String> _warmedBackgrounds = LinkedHashSet<String>();
+const int _warmedBackgroundsLimit = 64;
+
+/// Disk only, no decode: asks the render endpoint for a listed room's
+/// backdrop at the exact size the room will request, so its first-time
+/// server render and the download happen while the user is browsing, not
+/// after they tap. Once per URL per session; SVGA backdrops are skipped.
+void warmRoomBackgroundToDisk(BuildContext context, String? url) {
+  final raw = url?.trim() ?? '';
+  if (raw.isEmpty || MediaUrlUtil.isSvgaUrl(raw)) return;
+  final imageUrl = _roomBackgroundImageUrl(raw, roomBackgroundCachePx(context));
+  if (!_warmedBackgrounds.add(imageUrl)) return;
+  if (_warmedBackgrounds.length > _warmedBackgroundsLimit) {
+    _warmedBackgrounds.remove(_warmedBackgrounds.first);
+  }
+  unawaited(
+    AppImageCache.manager
+        .getSingleFile(imageUrl)
+        .then<void>((_) {}, onError: (Object _) {}),
+  );
+}
+
+/// On the tap: decode the backdrop into memory while the route is being
+/// pushed. Same provider key [RoomBackgroundMedia] resolves (URL + decode
+/// width), so its first frame is a cache hit, or joins this decode in flight.
+void precacheRoomBackground(BuildContext context, String? url) {
+  final raw = url?.trim() ?? '';
+  if (raw.isEmpty || MediaUrlUtil.isSvgaUrl(raw)) return;
+  final decodePx = roomBackgroundCachePx(context);
+  final provider = ResizeImage.resizeIfNeeded(
+    decodePx,
+    null,
+    CachedNetworkImageProvider(
+      _roomBackgroundImageUrl(raw, decodePx),
+      cacheManager: AppImageCache.manager,
+    ),
+  );
+  unawaited(precacheImage(provider, context, onError: (_, _) {}));
 }

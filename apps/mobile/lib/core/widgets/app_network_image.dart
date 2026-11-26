@@ -258,6 +258,67 @@ void retainRoomCover(String imageUrl, int cacheWidth) {
   }
 }
 
+/// Slides a group (e.g. one banner placement) keeps decoded at most.
+const int _groupRetainLimit = 10;
+
+final Map<String, List<_RetainedCover>> _retainedGroups = {};
+final Map<String, String> _retainedGroupSignatures = {};
+
+/// Keeps every image of [group] decoded in the memory cache while the group
+/// lists it, using the same provider [AppNetworkImage] paints with
+/// `gaplessPlayback: true`. A live room decodes enough art to evict a banner;
+/// pinned, coming back paints it on the first frame instead of a placeholder.
+/// Replacing a group releases what it no longer lists. Same list = no work.
+void retainImageGroup(
+  String group,
+  List<String> imageUrls, {
+  required int transformWidth,
+  int? transformHeight,
+  int? memCacheWidth,
+  int? memCacheHeight,
+}) {
+  final urls = imageUrls
+      .map((u) => u.trim())
+      .where((u) => u.isNotEmpty)
+      .take(_groupRetainLimit)
+      .toList(growable: false);
+  final signature =
+      '$transformWidth:$transformHeight:$memCacheWidth:$memCacheHeight:${urls.join('|')}';
+  if (_retainedGroupSignatures[group] == signature) return;
+  _retainedGroupSignatures[group] = signature;
+
+  final next = <_RetainedCover>[];
+  for (final raw in urls) {
+    final rewritten = SupabaseImageTransform.rewriteStorageHost(raw);
+    final transformed =
+        SupabaseImageTransform.url(
+          rewritten,
+          width: transformWidth,
+          height: transformHeight,
+        ) ??
+        rewritten;
+    final stream = _decodedProvider(
+      transformed,
+      memCacheWidth: memCacheWidth,
+      memCacheHeight: memCacheHeight,
+    ).resolve(ImageConfiguration.empty);
+    final listener = ImageStreamListener((info, _) {
+      info.dispose();
+    }, onError: (_, _) {});
+    stream.addListener(listener);
+    next.add(_RetainedCover(stream, listener));
+  }
+  // New listeners attach before old ones detach, so a slide kept across
+  // the update never drops to zero listeners (and out of the live cache).
+  final previous = _retainedGroups[group];
+  _retainedGroups[group] = next;
+  if (previous != null) {
+    for (final r in previous) {
+      r.stream.removeListener(r.listener);
+    }
+  }
+}
+
 CachedNetworkImageProvider AppNetworkImageProvider(
   String imageUrl, {
   int transformWidth = 600,

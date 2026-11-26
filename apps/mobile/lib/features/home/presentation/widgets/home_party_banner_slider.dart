@@ -4,6 +4,7 @@ import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:sk_live/core/providers/home_provider.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
+import 'package:sk_live/core/widgets/app_network_image.dart';
 import 'package:sk_live/core/widgets/promo_banner_carousel.dart';
 
 class HomePartyBannerSlider extends ConsumerWidget {
@@ -55,6 +56,16 @@ class HomePartyBannerSlider extends ConsumerWidget {
       skipLoadingOnReload: true,
       data: (banners) {
         if (banners.isEmpty) return const SizedBox.shrink();
+        // Pin every slide decoded (same provider the gapless carousel paints
+        // with): leaving for a room and coming back never re-decodes them.
+        retainImageGroup(
+          'banners:$placement',
+          [for (final b in banners) b['image_url']?.toString() ?? ''],
+          transformWidth: transformW,
+          transformHeight: transformH,
+          memCacheWidth: transformW,
+          memCacheHeight: transformH,
+        );
 
         return Container(
           margin: EdgeInsets.only(
@@ -78,6 +89,7 @@ class HomePartyBannerSlider extends ConsumerWidget {
             transformWidth: transformW,
             transformHeight: transformH,
             active: active,
+            gaplessPlayback: true,
             onBannerTap: onBannerTap,
             onPageChanged: onPageChanged,
             placeholder: (context, url) => _shimmer(bannerH),

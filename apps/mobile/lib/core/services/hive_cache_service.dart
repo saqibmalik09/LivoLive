@@ -14,6 +14,8 @@ class HiveCacheService {
   static const String _partyConfigKey = 'party_config_v1';
   static const String _gamesConfigsKey = 'game_configs_v5';
   static const String _gameConfigsFpKey = 'game_configs_fp_v5';
+  static const String _giftCatalogKey = 'gift_catalog_v1';
+  static const String _giftCatalogFpKey = 'gift_catalog_fp_v1';
   static const String _recentGamesKey = 'recent_room_games_v1';
   static const int recentGamesMax = 4;
   static const String _homeGamesRowKey = 'home_games_row_v1';
@@ -867,6 +869,69 @@ class HiveCacheService {
       return true;
     } catch (e) {
       debugPrint('[HiveCache] saveBackpack failed: $e');
+      return false;
+    }
+  }
+
+  static String giftCatalogFingerprint(List<Map<String, dynamic>> items) {
+    final parts = items.map((g) {
+      return [
+        _str(g['id']),
+        _str(g['category_id']),
+        _str(g['name']),
+        _str(g['price_coins']),
+        _str(g['image_url']),
+        _str(g['svga_url']),
+        _str(g['is_full_screen']),
+        _str(g['category_name']),
+        _str(g['category_order']),
+      ].join(':');
+    }).toList()
+      ..sort();
+    return parts.join('|');
+  }
+
+  static List<Map<String, dynamic>>? loadGiftCatalog() {
+    try {
+      final raw = _ui.get(_giftCatalogKey);
+      if (raw == null || raw.isEmpty) return null;
+      final list = jsonDecode(raw) as List;
+      return list
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (e) {
+      debugPrint('[HiveCache] loadGiftCatalog failed: $e');
+      return null;
+    }
+  }
+
+  static Future<bool> saveGiftCatalog(List<Map<String, dynamic>> items) async {
+    try {
+      final normalized = items.map((g) {
+        return {
+          'id': g['id']?.toString() ?? '',
+          'category_id': g['category_id']?.toString() ?? '',
+          'name': g['name']?.toString() ?? '',
+          'price_coins': g['price_coins'] ?? 0,
+          'image_url': g['image_url']?.toString() ?? '',
+          'svga_url': g['svga_url']?.toString() ?? '',
+          'is_full_screen': g['is_full_screen'] == true,
+          'category_name': g['category_name']?.toString() ?? '',
+          'category_order': g['category_order'] ?? 0,
+          'category_icon': g['category_icon']?.toString() ?? '',
+        };
+      }).toList();
+      final fp = giftCatalogFingerprint(normalized);
+      final existingFp = _ui.get(_giftCatalogFpKey);
+      if (existingFp != null && existingFp == fp) return false;
+      await Future.wait([
+        _ui.put(_giftCatalogKey, jsonEncode(normalized)),
+        _ui.put(_giftCatalogFpKey, fp),
+      ]);
+      return true;
+    } catch (e) {
+      debugPrint('[HiveCache] saveGiftCatalog failed: $e');
       return false;
     }
   }

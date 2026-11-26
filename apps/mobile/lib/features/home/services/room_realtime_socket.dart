@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -32,6 +32,10 @@ class RoomRealtimeSocket {
   String? _pendingRoomId;
   Map<String, dynamic>? _pendingUser;
   bool _rejoining = false;
+  // The room:join sent from onConnect, while its ack is outstanding. joinRoom
+  // waits on this instead of sending the same join a second time.
+  Future<Map<String, dynamic>?>? _rejoinFlight;
+  String? _rejoinFlightRoomId;
   // LiveKit session handed to us by a join or sit ack, waiting to be consumed
   // by the voice engine. See takeVoiceSession.
   Map<String, dynamic>? _prefetchedVoice;
@@ -276,8 +280,28 @@ class RoomRealtimeSocket {
     await completer.future.timeout(const Duration(seconds: 12));
   }
 
+  /// Whether a dropped socket should be brought back without waiting for the
+  /// next call that needs it.
+  ///
+  /// In a room: always, as before. Outside a room it used to wait for the
+  /// 30-second presence ping, so a room opened shortly after a drop paid for
+  /// the whole connect before any seat could load. Now it also reconnects
+  /// while the app is on screen and signed in. Not in the background: nothing
+  /// is listening there and retrying only spends battery.
+  bool get _wantsLiveSocket {
+    if (_joinedRoomId != null) return true;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return false;
+    }
+    try {
+      return Supabase.instance.client.auth.currentSession != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _scheduleReconnect() {
-    if (_joinedRoomId == null) return;
+    if (!_wantsLiveSocket) return;
     if (_reconnectTimer?.isActive == true) return;
 
     const backoff = [1, 2, 4, 8, 15];
@@ -286,7 +310,7 @@ class RoomRealtimeSocket {
     _reconnectAttempt++;
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
       _reconnectTimer = null;
-      if (_joinedRoomId == null || isConnected) return;
+      if (!_wantsLiveSocket || isConnected) return;
       try {
         await ensureConnected();
       } catch (e) {
@@ -297,20 +321,27 @@ class RoomRealtimeSocket {
   }
 
   Future<void> _rejoinCurrentRoom() async {
-    final roomId = _joinedRoomId ?? _pendingRoomId;
-    final user = _joinedUser ?? _pendingUser;
+    // The pending room is the one the user is entering right now. While a
+    // switch is in progress the joined room is still the one being left, and
+    // rejoining that put the user back into the room they had just walked out
+    // of before the real join ran.
+    final roomId = _pendingRoomId ?? _joinedRoomId;
+    final user = _pendingUser ?? _joinedUser;
     if (roomId == null || user == null || _rejoining) return;
     final socket = _socket;
     if (socket == null || !socket.connected) return;
     _rejoining = true;
+    final flight = _emitAckRaw('room:join', {
+      'roomId': roomId,
+      'user': user,
+      'snapshotRequest': true,
+      'event_id': RoomLiveBroadcast.newEventId(),
+    });
+    _rejoinFlight = flight;
+    _rejoinFlightRoomId = roomId;
     try {
       debugPrint('[Gateway] rejoin room=$roomId after reconnect');
-      final res = await _emitAckRaw('room:join', {
-        'roomId': roomId,
-        'user': user,
-        'snapshotRequest': true,
-        'event_id': RoomLiveBroadcast.newEventId(),
-      });
+      final res = await flight;
       if (res?['ok'] == true) {
         _joinedRoomId = roomId;
         _joinedUser = Map<String, dynamic>.from(user);
@@ -327,6 +358,10 @@ class RoomRealtimeSocket {
       debugPrint('[Gateway] rejoin failed: $e');
     } finally {
       _rejoining = false;
+      if (identical(_rejoinFlight, flight)) {
+        _rejoinFlight = null;
+        _rejoinFlightRoomId = null;
+      }
     }
   }
 
@@ -351,24 +386,45 @@ class RoomRealtimeSocket {
       debugPrint(
         '[Gateway] leave previous room=$previousRoomId before join=$roomId',
       );
+      // Sent, not awaited. The join used to wait for both of these acks, two
+      // full round trips (up to 8 seconds each when the server is slow)
+      // before the new room was even asked for. The socket delivers them in
+      // this order ahead of the join, and the gateway's room:join clears the
+      // user out of any other room itself, so nothing depends on the replies.
       final uid = user['id']?.toString();
       if (uid != null && uid.isNotEmpty) {
-        try {
-          await seatLeave({
+        unawaited(
+          _emitAckRaw('seat:leave', {
             'roomId': previousRoomId,
             'user_id': uid,
             'event_id': RoomLiveBroadcast.newEventId(),
-          });
-        } catch (e) {
-          debugPrint('[Gateway] seatLeave previous before join failed: $e');
-        }
+          }),
+        );
       }
-      await _emitAckRaw('room:leave', {
-        'roomId': previousRoomId,
-        'user': user,
-        'event_id': RoomLiveBroadcast.newEventId(),
-      });
+      unawaited(
+        _emitAckRaw('room:leave', {
+          'roomId': previousRoomId,
+          'user': user,
+          'event_id': RoomLiveBroadcast.newEventId(),
+        }),
+      );
       if (_joinedRoomId == previousRoomId) _joinedRoomId = null;
+    }
+
+    // If ensureConnected had to open the socket, onConnect has already sent
+    // room:join for this room. Sending it again made the gateway run the whole
+    // join twice in parallel, on the entry that was already the slowest.
+    final rejoin = _rejoinFlight;
+    if (rejoin != null && _rejoinFlightRoomId == roomId) {
+      final rejoined = await rejoin;
+      if (rejoined?['ok'] == true) {
+        _joinedRoomId = roomId;
+        _joinedUser = Map<String, dynamic>.from(user);
+        return rejoined;
+      }
+      if (rejoined?['error']?.toString() == 'kicked_from_room') {
+        return rejoined;
+      }
     }
 
     final res = await _emitAckRaw('room:join', {

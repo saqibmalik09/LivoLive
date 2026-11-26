@@ -86,6 +86,7 @@ import 'package:sk_live/core/util/room_win_card_util.dart';
 import 'package:sk_live/core/widgets/user_badge_chip.dart';
 import 'package:sk_live/core/widgets/user_member_identity.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_gift_sender.dart';
+import 'package:sk_live/features/home/presentation/widgets/room_full_screen_gift.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_bottom_toolbar_button.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_private_messages_sheet.dart';
 import 'package:sk_live/core/providers/notification_provider.dart';
@@ -101,6 +102,7 @@ import 'package:sk_live/features/home/presentation/widgets/room_side_float_rail.
 import 'package:sk_live/features/home/presentation/widgets/room_contribution_sheet.dart';
 import 'package:sk_live/features/home/presentation/pages/gift_center_screen.dart';
 import 'package:sk_live/core/providers/room_contribution_provider.dart';
+import 'package:sk_live/core/providers/shop_provider.dart';
 import 'package:sk_live/features/home/presentation/widgets/team_pk/team_pk_overlay.dart';
 import 'package:sk_live/features/home/presentation/widgets/team_pk/team_pk_setting_sheet.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_mic_emoji_sheet.dart';
@@ -154,6 +156,14 @@ class _PendingRepeatGift {
   int taps = 1;
 
   int get quantity => session.quantity * taps;
+}
+
+/// A lucky gift's chat line, parked until its roll stops.
+class _PendingLuckyGiftComment {
+  _PendingLuckyGiftComment({required this.message, required this.timer});
+
+  final Map<String, dynamic> message;
+  final Timer timer;
 }
 
 class RoomLiveScreen extends ConsumerStatefulWidget {
@@ -261,6 +271,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   static final RegExp _zegoPrefix = RegExp(r'^zego\b', caseSensitive: false);
   final List<Map<String, dynamic>> _messages = [];
   final Set<String> _messageKeys = <String>{};
+
+  /// Lucky gift comments waiting for their roll result, by gift log id.
+  final Map<String, _PendingLuckyGiftComment> _pendingLuckyGiftComments = {};
+
+  /// How long a lucky comment waits for its win event before posting plain.
+  /// The gateway rolls right after the fan-out, so a win lands well inside it.
+  static const Duration _luckyGiftSettleWindow = Duration(seconds: 3);
 
   final ValueNotifier<int> _chatListVersion = ValueNotifier(0);
   final ScrollController _chatScrollController = ScrollController();
@@ -377,6 +394,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   // each rebuild the whole screen.
   String? _lastSnapshotSignature;
   DateTime? _lastSnapshotAppliedAt;
+  // Time from this screen being created to the first seat list from the
+  // gateway. Logged once per room open so the one-second target can be checked
+  // on a real device instead of guessed.
+  final Stopwatch _roomOpenWatch = Stopwatch()..start();
+  bool _firstSeatsLogged = false;
   static const Duration _snapshotDedupeWindow = Duration(seconds: 2);
 
   DateTime? _localUnmuteGuardUntil;
@@ -402,36 +424,66 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _notifyChatListChanged();
   }
 
-  String? _chatMessageKey(Map<String, dynamic> message) {
+  /// Every identity one chat row can arrive with.
+  ///
+  /// A gift reaches the room twice: as the socket / broadcast copy, whose `id`
+  /// is the gateway's `metadata.event_id`, and as the `room_messages` insert the
+  /// gateway writes for history, whose `id` is the row uuid. Keying on `id`
+  /// alone made those two different messages, so the gift was listed twice.
+  List<String> _chatMessageKeys(Map<String, dynamic> message) {
+    final keys = <String>[];
     final id = message['id']?.toString();
-    if (id != null && id.isNotEmpty) return id;
+    if (id != null && id.isNotEmpty) keys.add('id:$id');
     final meta = message['metadata'];
     if (meta is Map) {
       final eventId = meta['event_id']?.toString();
-      if (eventId != null && eventId.isNotEmpty) return eventId;
+      // Only gifts carry one event_id on two rows; a lucky_win copy repeats its
+      // gift's event_id on purpose, so it keeps keying on its own id.
+      final aliasEventId =
+          keys.isEmpty || message['type']?.toString() == 'gift';
+      if (eventId != null && eventId.isNotEmpty && aliasEventId) {
+        keys.add('evt:$eventId');
+      }
     }
-    return null;
+    return keys;
+  }
+
+  /// Reserves a message's keys without listing it yet. Used while a lucky gift
+  /// comment waits for its roll, so other copies of the same gift stay out.
+  bool _claimChatMessageKeys(Map<String, dynamic> message) {
+    final keys = _chatMessageKeys(message);
+    if (keys.isEmpty) return true;
+    if (keys.any(_messageKeys.contains)) return false;
+    _messageKeys.addAll(keys);
+    return true;
   }
 
   bool _tryAppendChatMessage(
     Map<String, dynamic> message, {
     bool scroll = true,
+    bool keysClaimed = false,
   }) {
-    final key = _chatMessageKey(message);
-    if (key != null && !_messageKeys.add(key)) return false;
+    if (!keysClaimed && !_claimChatMessageKeys(message)) return false;
 
     _messages.add(message);
     while (_messages.length > _maxChatMessages) {
       final old = _messages.removeAt(0);
-      final oldKey = _chatMessageKey(old);
-      if (oldKey != null) _messageKeys.remove(oldKey);
+      _messageKeys.removeAll(_chatMessageKeys(old));
     }
     _notifyChatListChanged();
     if (scroll) _scrollToBottom();
     return true;
   }
 
+  void _cancelPendingLuckyGiftComments() {
+    for (final pending in _pendingLuckyGiftComments.values) {
+      pending.timer.cancel();
+    }
+    _pendingLuckyGiftComments.clear();
+  }
+
   void _clearChatMessages({bool clearGlobalWins = false}) {
+    _cancelPendingLuckyGiftComments();
     _messages.clear();
     _messageKeys.clear();
     if (clearGlobalWins) _globalWinMessages.clear();
@@ -457,6 +509,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   RoomBonusPattiData? _bonusPatti;
   bool _bonusPattiVisible = false;
   Timer? _bonusPattiHideTimer;
+
+  /// Running gift count per sender while their combo is live, so a lucky
+  /// strip opens on the combo so far instead of x1 for the winning gift.
+  final Map<String, ({int total, int atMs})> _giftComboBySender = {};
 
   final LinkedHashSet<String> _seenLuckyFloatKeys = LinkedHashSet();
   int _luckyFloatStackSeq = 0;
@@ -589,7 +645,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   bool _fullScreenGiftShowing = false;
   OverlayEntry? _fullScreenGiftOverlayEntry;
   /// Bounded FS gift queue — drop oldest under storm so busy rooms stay live.
-  final ListQueue<String> _fullScreenGiftQueue = ListQueue<String>();
+  /// The icon rides along as the fallback when the SVGA cannot be decoded.
+  final ListQueue<({String svgaUrl, String iconUrl})> _fullScreenGiftQueue =
+      ListQueue<({String svgaUrl, String iconUrl})>();
   static const int _maxFullScreenGiftQueued = 3;
   RepeatGiftSession? _repeatGiftSession;
   bool _isRepeatSending = false;
@@ -936,6 +994,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       Future<void>.delayed(const Duration(milliseconds: 2500), () {
         if (mounted) _fetchActiveGames();
       });
+      // Gift sheet used to fetch once per category on first open. Warm the
+      // shared catalog (and first-page icons) after the room settle so the
+      // gift button is ready when the user taps it.
+      Future<void>.delayed(const Duration(milliseconds: 1200), () {
+        if (mounted) warmGiftCatalog(ref);
+      });
       _fetchCurrentUserRole();
       _startActivityTimer();
       unawaited(_fetchRoomLevelStats());
@@ -1068,13 +1132,19 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<void> _setupRoomSubscriptionsWhenProfileReady() async {
     if (_profileRetryUsed) return;
     _profileRetryUsed = true;
-    try {
-      await ref
-          .read(userProfileProvider.future)
-          .timeout(const Duration(seconds: 10));
-    } catch (e) {
-      debugPrint('[SEAT] profile unavailable, room realtime not started: $e');
-      return;
+    // Waiting on the provider's future was not enough. While the saved login
+    // is still being restored after a cold start the provider answers null
+    // straight away, so that await returned at once, the retry below was
+    // already spent, and the room never joined the gateway: no seats and no
+    // events until the user left and came back. Wait for an actual profile.
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (mounted && ref.read(userProfileProvider).value == null) {
+      if (DateTime.now().isAfter(deadline)) {
+        debugPrint('[SEAT] profile unavailable, room realtime not started');
+        _profileRetryUsed = false;
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 150));
     }
     if (!mounted) return;
     _setupRoomSubscriptions();
@@ -1714,6 +1784,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _lastSnapshotAppliedAt = now;
     final seatsRaw = snap['seats'];
     if (seatsRaw is List) {
+      if (!_firstSeatsLogged) {
+        _firstSeatsLogged = true;
+        final ms = _roomOpenWatch.elapsedMilliseconds;
+        debugPrint('[ROOM-OPEN] first seats ms=$ms seated=${seatsRaw.length}');
+        if (ms > 1000) AppTelemetry.log('SLOW room_first_seats ${ms}ms');
+      }
       final occupied = seatsRaw
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
@@ -5927,6 +6003,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _repeatGiftHideTimer?.cancel();
     _repeatComboTick.dispose();
     _bonusPattiHideTimer?.cancel();
+    _cancelPendingLuckyGiftComments();
     _voiceHealDebounce?.cancel();
 
     if (!keepZegoAlive && AppConstants.useRealtimeGateway) {
@@ -8784,8 +8861,15 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   /// taking a seat where it adds its own delay.
   Future<void> _ensureMicPermissionAtEntry() async {
     try {
-      if (await Permission.microphone.isGranted) return;
-      await Permission.microphone.request();
+      if (!await Permission.microphone.isGranted) {
+        await Permission.microphone.request();
+      }
+      // Android 12+ needs BLUETOOTH_CONNECT at runtime before AudioSwitch may
+      // see or activate a Bluetooth headset. Without it the earbuds never
+      // appear as an output and voice stays on the loudspeaker.
+      if (Platform.isAndroid && !await Permission.bluetoothConnect.isGranted) {
+        await Permission.bluetoothConnect.request();
+      }
     } catch (e) {
       debugPrint('[ROOM] mic permission at entry: $e');
     }
@@ -9510,6 +9594,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   void _stopGiftAnimations() {
     _giftFlightController.clearAll();
     _micEmojiOverlayController.clearAll();
+    _cancelPendingLuckyGiftComments();
     _seenFullScreenGiftBatchIds.clear();
     _fullScreenGiftQueue.clear();
     if (_fullScreenGiftOverlayEntry?.mounted == true) {
@@ -9596,6 +9681,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     required String batchId,
     required String svgaUrl,
     required bool isFullScreen,
+    String fallbackIconUrl = '',
   }) {
     if (!isFullScreen || svgaUrl.isEmpty || !mounted) return;
 
@@ -9605,7 +9691,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     while (_seenFullScreenGiftBatchIds.length > _maxSeenBroadcastIds) {
       _seenFullScreenGiftBatchIds.remove(_seenFullScreenGiftBatchIds.first);
     }
-    _showFullScreenGift(svgaUrl);
+    _showFullScreenGift(svgaUrl, fallbackIconUrl: fallbackIconUrl);
   }
 
   List<Map<String, dynamic>> _getGiftTargetMembers() {
@@ -10055,10 +10141,34 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (targetIds.isEmpty) return;
     if (giftIcon.isEmpty && !(isFullScreen && svgaUrl.isNotEmpty)) return;
 
-    _bumpBonusPattiCombo(senderId: senderId, qty: quantity);
+    // The sender's optimistic copy and the settled echo of the same gift
+    // share a batch id; count it once.
+    final alreadyCounted =
+        dedupeKey != null &&
+        dedupeKey.isNotEmpty &&
+        _giftFlightController.hasPlayed(dedupeKey);
+    if (!alreadyCounted) {
+      _noteGiftCombo(senderId, quantity);
+      _bumpBonusPattiCombo(senderId: senderId, qty: quantity);
+    }
 
     // A game sheet covers the room: no new gift flights behind it (S6).
     if (ref.read(gameOverlayOpenProvider) > 0) return;
+
+    // Full screen goes through the batch guard, never straight from the flight
+    // manager: the sender's own send and the echo of it are one gift, and the
+    // unguarded path played the SVGA for them a second time.
+    if (playFullScreenSvga && isFullScreen && svgaUrl.isNotEmpty) {
+      _maybeShowFullScreenGiftAnimation(
+        batchId: dedupeKey ?? '',
+        svgaUrl: svgaUrl,
+        isFullScreen: true,
+        fallbackIconUrl: giftIcon,
+      );
+      if (giftIcon.isEmpty && dedupeKey != null && dedupeKey.isNotEmpty) {
+        _giftFlightController.markPlayed(dedupeKey);
+      }
+    }
 
     _giftFlightController.enqueue(
       GiftFlightRequest(
@@ -10067,8 +10177,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         targetIds: targetIds,
         imageUrl: giftIcon,
         quantity: quantity,
-        isFullScreen: playFullScreenSvga && isFullScreen,
+        isFullScreen: false,
         svgaUrl: svgaUrl,
+        holdAtCenter: !(isFullScreen && svgaUrl.isNotEmpty),
+        comboKey: senderId,
         resolveOffset: (userId) {
           if (userId == '__gift_spawn__') {
             return _giftSpawnOffset();
@@ -10244,13 +10356,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
 
     final giftMessages = _giftMessagesFromPayload(payload);
-    if (giftMessages.isNotEmpty && mounted) {
-      var added = false;
-      for (final msg in giftMessages) {
-        if (_tryAppendChatMessage(msg, scroll: false)) added = true;
-      }
-      if (added) _scrollToBottom();
-    }
+    if (mounted) _appendGiftChatMessages(giftMessages);
 
     for (final msg in giftMessages) {
       _maybeBroadcastLuckyWinFromGiftMessage(msg);
@@ -10258,6 +10364,140 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
 
     unawaited(_broadcastRoomGift(payload));
+  }
+
+  /// Single entry point for the chat line of a gift batch.
+  ///
+  /// Registers each row's own `event_id` so the `room_messages` insert the
+  /// gateway writes for the same gift is dropped by
+  /// [_onRoomMessagePostgresReconcile] — only the batch id used to be
+  /// registered, which is why the room listed every gift twice.
+  void _appendGiftChatMessages(List<Map<String, dynamic>> messages) {
+    var added = false;
+    for (final msg in messages) {
+      _markGiftMessageSeen(msg);
+      if (_holdLuckyGiftComment(msg)) continue;
+      if (_tryAppendChatMessage(msg, scroll: false)) added = true;
+    }
+    if (added) _scrollToBottom();
+  }
+
+  void _markGiftMessageSeen(Map<String, dynamic> message) {
+    final meta = message['metadata'];
+    if (meta is! Map) return;
+    final eventId = meta['event_id']?.toString();
+    if (eventId == null || eventId.isEmpty) return;
+    RoomLiveBroadcast.shouldIgnore(
+      _seenBroadcastEventIds,
+      eventId,
+      maxSize: _maxSeenBroadcastIds,
+    );
+  }
+
+  /// True while a lucky gift's roll is still running on the gateway.
+  ///
+  /// The gateway fans the gift out first and rolls afterwards, so the message
+  /// it broadcasts carries the lucky flags with no result yet. Posting it then
+  /// put a comment in chat mid-spin, followed by a second one for the win.
+  bool _isLuckyRollPending(Map<String, dynamic> message) {
+    if (message['type']?.toString() != 'gift') return false;
+    final meta = message['metadata'];
+    if (meta is! Map) return false;
+    final isLucky =
+        meta['is_lucky_gift'] == true || meta['is_lucky_pro_gift'] == true;
+    if (!isLucky) return false;
+    if (meta['lucky_bonus_won'] == true || meta['lucky_pro_bonus_won'] == true) {
+      return false;
+    }
+    if (meta['lucky_engine']?.toString() != 'gateway') return false;
+    return (meta['gift_log_id']?.toString() ?? '').isNotEmpty;
+  }
+
+  bool _holdLuckyGiftComment(Map<String, dynamic> message) {
+    if (!_isLuckyRollPending(message)) return false;
+    final meta = message['metadata'] as Map;
+    final giftLogId = meta['gift_log_id'].toString();
+    if (_pendingLuckyGiftComments.containsKey(giftLogId)) return true;
+    // Claim the row's ids while it waits, so the postgres copy of the same gift
+    // cannot post the un-settled line behind our back.
+    if (!_claimChatMessageKeys(message)) return true;
+    _pendingLuckyGiftComments[giftLogId] = _PendingLuckyGiftComment(
+      message: message,
+      timer: Timer(_luckyGiftSettleWindow, () {
+        // Window elapsed with no win event: the roll lost, post the plain line.
+        _releaseLuckyGiftComment(giftLogId);
+      }),
+    );
+    return true;
+  }
+
+  void _releaseLuckyGiftComment(
+    String giftLogId, {
+    Map<String, dynamic>? win,
+  }) {
+    final pending = _pendingLuckyGiftComments.remove(giftLogId);
+    if (pending == null) return;
+    pending.timer.cancel();
+    if (!mounted) return;
+    if (win != null) _mergeLuckyWinIntoGiftMessage(pending.message, win);
+    _tryAppendChatMessage(pending.message, keysClaimed: true);
+  }
+
+  /// Lands a settled win on its held gift comment, so the room reads one line
+  /// carrying both the gift and the multiplier it hit.
+  void _settleLuckyGiftComment(Map<String, dynamic> luckyMessage) {
+    final meta = luckyMessage['metadata'];
+    if (meta is! Map) return;
+    final giftLogId = meta['gift_log_id']?.toString() ?? '';
+    if (giftLogId.isEmpty) return;
+    if (!_pendingLuckyGiftComments.containsKey(giftLogId)) return;
+    _releaseLuckyGiftComment(
+      giftLogId,
+      win: Map<String, dynamic>.from(meta),
+    );
+  }
+
+  void _mergeLuckyWinIntoGiftMessage(
+    Map<String, dynamic> message,
+    Map<String, dynamic> win,
+  ) {
+    final meta = message['metadata'];
+    if (meta is! Map) return;
+    final isPro =
+        win['lucky_pro_bonus_won'] == true || win['is_lucky_pro_gift'] == true;
+    final coins = isPro
+        ? ((win['lucky_pro_bonus_coins'] as num?)?.toInt() ?? 0)
+        : ((win['lucky_bonus_coins'] as num?)?.toInt() ?? 0);
+    if (coins <= 0) return;
+
+    final multiplier = _resolveLuckyMultiplier(
+      meta,
+      coins,
+      // The gift row carries a placeholder x1 until the roll lands, so the win
+      // event's own value is what counts here.
+      reported: (win['bonus_multiplier'] as num?)?.toInt() ?? 0,
+    );
+
+    meta['lucky_bonus_won'] = !isPro;
+    meta['lucky_pro_bonus_won'] = isPro;
+    meta[isPro ? 'lucky_pro_bonus_coins' : 'lucky_bonus_coins'] = coins;
+    meta['bonus_multiplier'] = multiplier;
+    meta['multiplier_tier'] = RoomWinCardUtil.resolveMultiplierTier(multiplier);
+  }
+
+  /// The roll's multiplier, falling back to reward ÷ gift value for gateways
+  /// and old rows that only carry the coins.
+  int _resolveLuckyMultiplier(Map meta, int rewardCoins, {int? reported}) {
+    final declared =
+        reported ?? (meta['bonus_multiplier'] as num?)?.toInt() ?? 0;
+    if (declared > 0) return declared;
+    final giftValue =
+        ((meta['price_coins'] as num?)?.toInt() ?? 0) *
+        ((meta['quantity'] as num?)?.toInt() ?? 1);
+    return RoomWinCardUtil.computeBonusMultiplier(
+      rewardCoins: rewardCoins,
+      giftValue: giftValue,
+    );
   }
 
   List<Map<String, dynamic>> _giftMessagesFromPayload(
@@ -10478,6 +10718,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final giftIcon =
         meta['gift_icon']?.toString() ?? meta['icon_url']?.toString();
     final giftQty = ((meta['quantity'] as num?)?.toInt() ?? 1).clamp(1, 9999);
+    final multiplier = _resolveLuckyMultiplier(meta, rewardCoins);
 
     if (!mounted) return;
     setState(() {
@@ -10494,6 +10735,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           subtitle: _bonusPattiSubtitle(meta),
           bonusCoins: rewardCoins,
           isLuckyPro: luckyProWon || existing.isLuckyPro,
+          bonusMultiplier: multiplier,
         );
       } else {
         _bonusPatti = RoomBonusPattiData(
@@ -10502,14 +10744,43 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           avatarUrl: avatarUrl,
           giftIcon: giftIcon,
           subtitle: _bonusPattiSubtitle(meta),
-          comboCount: giftQty,
+          comboCount: _liveGiftCombo(senderId) > giftQty
+              ? _liveGiftCombo(senderId)
+              : giftQty,
           bonusCoins: rewardCoins,
           isLuckyPro: luckyProWon,
+          bonusMultiplier: multiplier,
         );
       }
       _bonusPattiVisible = true;
     });
     _armBonusPattiHide();
+  }
+
+  void _noteGiftCombo(String senderId, int qty) {
+    if (senderId.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final prev = _giftComboBySender.remove(senderId);
+    var carried = 0;
+    if (prev != null &&
+        now - prev.atMs <= _repeatGiftVisibleFor.inMilliseconds) {
+      carried = prev.total;
+    }
+    _giftComboBySender[senderId] = (
+      total: carried + qty.clamp(1, 9999),
+      atMs: now,
+    );
+    if (_giftComboBySender.length > 64) {
+      _giftComboBySender.remove(_giftComboBySender.keys.first);
+    }
+  }
+
+  /// The sender's combo so far, or 0 once it has gone quiet.
+  int _liveGiftCombo(String senderId) {
+    final entry = _giftComboBySender[senderId];
+    if (entry == null) return 0;
+    final age = DateTime.now().millisecondsSinceEpoch - entry.atMs;
+    return age <= _repeatGiftVisibleFor.inMilliseconds ? entry.total : 0;
   }
 
   void _bumpBonusPattiCombo({required String senderId, required int qty}) {
@@ -10774,7 +11045,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final batchId = metadata['animation_batch_id']?.toString() ?? '';
     final targetId = metadata['target_id']?.toString() ?? '';
     final messageId = msg['id']?.toString() ?? '';
-    final dedupeKey = batchId.isNotEmpty ? '${batchId}_$targetId' : messageId;
+    // The batch id, not batch+target: room_gift keys the whole batch by it, and
+    // keying this path differently let the same gift fly twice whenever the
+    // postgres insert arrived before the socket event.
+    final dedupeKey = batchId.isNotEmpty ? batchId : messageId;
 
     final giftIcon = metadata['gift_icon']?.toString() ?? '';
     final quantity = (metadata['quantity'] as num?)?.toInt() ?? 1;
@@ -10785,11 +11059,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       batchId: batchId,
       svgaUrl: svgaUrl,
       isFullScreen: isFullScreen,
+      fallbackIconUrl: giftIcon,
     );
 
-    if (batchId.isNotEmpty && _giftFlightController.hasPlayed(batchId)) {
-      return;
-    }
     if (dedupeKey.isNotEmpty && _giftFlightController.hasPlayed(dedupeKey)) {
       return;
     }
@@ -10808,7 +11080,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _maybeEnqueueBigGiftPattiFromGiftMessage(msg);
   }
 
-  void _showFullScreenGift(String svgaUrl) {
+  void _showFullScreenGift(String svgaUrl, {String fallbackIconUrl = ''}) {
     final url = svgaUrl.trim();
     if (url.isEmpty) return;
     // This overlay plays on top of everything, including an open game sheet;
@@ -10818,13 +11090,13 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       while (_fullScreenGiftQueue.length >= _maxFullScreenGiftQueued) {
         _fullScreenGiftQueue.removeFirst();
       }
-      _fullScreenGiftQueue.addLast(url);
+      _fullScreenGiftQueue.addLast((svgaUrl: url, iconUrl: fallbackIconUrl));
       return;
     }
-    _playFullScreenGiftNow(url);
+    _playFullScreenGiftNow(url, fallbackIconUrl: fallbackIconUrl);
   }
 
-  void _playFullScreenGiftNow(String svgaUrl) {
+  void _playFullScreenGiftNow(String svgaUrl, {String fallbackIconUrl = ''}) {
     if (!mounted) return;
     _fullScreenGiftShowing = true;
     debugPrint('Showing full screen gift: $svgaUrl');
@@ -10837,11 +11109,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               Positioned.fill(
                 child: Container(
                   color: Colors.black.withValues(alpha: 0.35),
-                  child: RaveSVGAPlayer(
-                    resUrl: svgaUrl,
-                    repeat: false,
-                    fit: BoxFit.cover,
-                    playbackSpeed: 1.5,
+                  child: RoomFullScreenGift(
+                    svgaUrl: svgaUrl,
+                    fallbackIconUrl: fallbackIconUrl,
                     onFinished: () {
                       _onFullScreenGiftFinished(entry);
                     },
@@ -10873,7 +11143,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (_fullScreenGiftShowing) return;
     if (_fullScreenGiftQueue.isEmpty) return;
     final next = _fullScreenGiftQueue.removeFirst();
-    _playFullScreenGiftNow(next);
+    _playFullScreenGiftNow(next.svgaUrl, fallbackIconUrl: next.iconUrl);
   }
 
   Widget _buildChatArea() {
@@ -11183,6 +11453,33 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
   }
 
+  /// One line per gift: "sent Rose to Ann", "sent Rose x5 to Ann", and for a
+  /// settled lucky roll the win rides on the same line instead of a second
+  /// comment. Null when the row predates the metadata this needs.
+  String? _giftChatLine(Map<String, dynamic>? metadata) {
+    if (metadata == null) return null;
+    final giftName = metadata['gift_name']?.toString() ?? '';
+    final receiver = metadata['receiver_username']?.toString() ?? '';
+    if (giftName.isEmpty || receiver.isEmpty) return null;
+
+    final quantity = (metadata['quantity'] as num?)?.toInt() ?? 1;
+    final qtySuffix = quantity > 1 ? ' x$quantity' : '';
+    final line = 'sent $giftName$qtySuffix to $receiver';
+
+    final luckyProWon = metadata['lucky_pro_bonus_won'] == true;
+    final luckyWon = metadata['lucky_bonus_won'] == true;
+    if (!luckyProWon && !luckyWon) return line;
+
+    final coins = luckyProWon
+        ? ((metadata['lucky_pro_bonus_coins'] as num?)?.toInt() ?? 0)
+        : ((metadata['lucky_bonus_coins'] as num?)?.toInt() ?? 0);
+    if (coins <= 0) return line;
+    final multiplier = _resolveLuckyMultiplier(metadata, coins);
+    final label = luckyProWon ? 'Lucky Pro' : 'Lucky';
+    return '$line — $label x$multiplier '
+        '+${NumberFormatter.format(coins)} coins';
+  }
+
   Widget _buildChatBubble(Map<String, dynamic> msg) {
     final userId = msg['user_id']?.toString() ?? '';
     final styleIndex = userId.hashCode.abs() % 4;
@@ -11239,6 +11536,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       final int priceCoins = (metadata?['price_coins'] as num?)?.toInt() ?? 0;
       final int quantity = (metadata?['quantity'] as num?)?.toInt() ?? 1;
       final int totalCoins = priceCoins * quantity;
+      displayContent = _giftChatLine(metadata) ?? displayContent;
       if (totalCoins > 0) {
         displayContent += ' (${NumberFormatter.format(totalCoins)} Coins)';
       }

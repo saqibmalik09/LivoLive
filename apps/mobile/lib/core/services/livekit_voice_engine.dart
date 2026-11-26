@@ -100,11 +100,14 @@ class LiveKitVoiceEngine implements VoiceEngine {
           final outputs = devices
               .where((d) => d.kind == 'audiooutput')
               .toList(growable: false);
-          final signature = outputs.map((d) => d.label).toList()..sort();
+          final signature = outputs
+              .map((d) => '${d.deviceId}:${d.label}')
+              .toList()
+            ..sort();
           final joined = signature.join('|');
           if (joined == _lastDeviceSignature) return;
           _lastDeviceSignature = joined;
-          _headsetPresent = outputs.any((d) => _isHeadsetLabel(d.label));
+          _headsetPresent = outputs.any(_isHeadsetDevice);
 
           _deviceChangeDebounce?.cancel();
           _deviceChangeDebounce = Timer(
@@ -807,11 +810,10 @@ class LiveKitVoiceEngine implements VoiceEngine {
   Future<void> _reassertSpeakerRoute() async {
     try {
       final outputs = await _audioOutputDevices();
-      final labels = outputs.map((d) => d.label).toList(growable: false);
-      final headsetNow = labels.any(_isHeadsetLabel);
+      final headsetNow = outputs.any(_isHeadsetDevice);
       // Empty enumeration right after unmute must not clear a known headset —
       // that is what forced loudspeaker and muted hands-free.
-      if (labels.isNotEmpty) {
+      if (outputs.isNotEmpty) {
         _headsetPresent = headsetNow;
       }
       final headset = _headsetPresent || headsetNow;
@@ -846,7 +848,8 @@ class LiveKitVoiceEngine implements VoiceEngine {
       }
       debugPrint(
         '[LK] speaker route: pref=$wantSpeaker (toggle=$_speakerOn) '
-        'headset=$headset force=$force devices=$labels',
+        'headset=$headset force=$force '
+        'devices=${outputs.map((d) => '${d.deviceId}/${d.label}').toList()}',
       );
     } catch (e) {
       debugPrint('[LK] speaker route re-assert failed: $e');
@@ -854,14 +857,20 @@ class LiveKitVoiceEngine implements VoiceEngine {
   }
 
   /// Prefer a connected Bluetooth / wired / USB headset on Android.
+  ///
+  /// Bluetooth first, to match the order AudioSwitch itself prefers, so the
+  /// explicit selection cannot disagree with the preference we just set.
   Future<void> _selectHeadsetOutput(List<lk.MediaDevice> outputs) async {
     try {
       lk.MediaDevice? headset;
       for (final d in outputs) {
-        if (_isHeadsetLabel(d.label)) {
+        if (!_isHeadsetDevice(d)) continue;
+        final bluetooth = _isBluetoothDevice(d);
+        if (bluetooth) {
           headset = d;
           break;
         }
+        headset ??= d;
       }
       if (headset == null) return;
       await lk.Hardware.instance.selectAudioOutput(headset);
@@ -877,6 +886,51 @@ class LiveKitVoiceEngine implements VoiceEngine {
       debugPrint('[LK] audioOutputs lookup failed: $e');
       return const [];
     }
+  }
+
+  /// A route is a headset by what the platform calls its *type*, never by the
+  /// name the hardware gave itself. Android reports `deviceId` / `groupId` as
+  /// the AudioSwitch kind (`bluetooth`, `wired-headset`, `speaker`,
+  /// `earpiece`) while `label` is the product name — "AirPods Pro",
+  /// "Galaxy Buds", "boAt Rockerz". iOS reports `groupId` as the
+  /// AVAudioSession port type (`BluetoothHFP`, `Headphones`, `USBAudio`).
+  /// Matching the label alone therefore saw no headset for every branded pair
+  /// of earbuds, so the route was forced to the loudspeaker and hands-free
+  /// stayed silent.
+  static bool _isHeadsetDevice(lk.MediaDevice d) =>
+      _isHeadsetRouteId(d.deviceId) ||
+      _isHeadsetRouteId(d.groupId ?? '') ||
+      _isHeadsetLabel(d.label);
+
+  static bool _isBluetoothDevice(lk.MediaDevice d) {
+    for (final v in [d.deviceId, d.groupId ?? '', d.label]) {
+      final s = v.toLowerCase();
+      if (s.contains('bluetooth') ||
+          s.contains('a2dp') ||
+          s.contains('hfp') ||
+          s.contains('sco')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _isHeadsetRouteId(String raw) {
+    final id = raw.toLowerCase();
+    if (id.isEmpty) return false;
+    // The built-in routes on both platforms: Android "speaker" / "earpiece",
+    // iOS port types "Speaker" / "Receiver".
+    if (id == 'speaker' || id == 'earpiece' || id == 'receiver') return false;
+    return id.contains('bluetooth') ||
+        id.contains('headset') ||
+        id.contains('headphone') ||
+        id.contains('wired') ||
+        id.contains('usb') ||
+        id.contains('a2dp') ||
+        id.contains('hfp') ||
+        id.contains('sco') ||
+        id.contains('caraudio') ||
+        id.contains('airplay');
   }
 
   static bool _isHeadsetLabel(String raw) {

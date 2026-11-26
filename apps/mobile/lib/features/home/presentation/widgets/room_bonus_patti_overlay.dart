@@ -1,5 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:sk_live/core/util/app_image_cache.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
 
 class RoomBonusPattiData {
@@ -12,6 +14,7 @@ class RoomBonusPattiData {
     required this.comboCount,
     required this.bonusCoins,
     required this.isLuckyPro,
+    this.bonusMultiplier = 1,
   });
 
   final String senderId;
@@ -23,6 +26,9 @@ class RoomBonusPattiData {
   final int bonusCoins;
   final bool isLuckyPro;
 
+  /// What the roll paid relative to the gift's value, shown as "x25".
+  final int bonusMultiplier;
+
   RoomBonusPattiData copyWith({
     String? username,
     String? avatarUrl,
@@ -31,6 +37,7 @@ class RoomBonusPattiData {
     int? comboCount,
     int? bonusCoins,
     bool? isLuckyPro,
+    int? bonusMultiplier,
   }) {
     return RoomBonusPattiData(
       senderId: senderId,
@@ -41,6 +48,7 @@ class RoomBonusPattiData {
       comboCount: comboCount ?? this.comboCount,
       bonusCoins: bonusCoins ?? this.bonusCoins,
       isLuckyPro: isLuckyPro ?? this.isLuckyPro,
+      bonusMultiplier: bonusMultiplier ?? this.bonusMultiplier,
     );
   }
 }
@@ -254,7 +262,20 @@ class _RoomBonusPattiOverlayState extends State<RoomBonusPattiOverlay>
                                 width: 20,
                                 height: 20,
                                 child: CachedNetworkImage(
-                                  imageUrl: widget.data.giftIcon!,
+                                  // Gift sheet's cached rendition: on disk
+                                  // already, so the icon is there as the
+                                  // strip slides in.
+                                  imageUrl:
+                                      SupabaseImageTransform.url(
+                                        widget.data.giftIcon!,
+                                        width: 128,
+                                        height: 128,
+                                        resize: 'contain',
+                                        quality: 75,
+                                      ) ??
+                                      widget.data.giftIcon!,
+                                  cacheManager: AppImageCache.manager,
+                                  fadeInDuration: Duration.zero,
                                   fit: BoxFit.contain,
                                   errorWidget: (_, __, ___) =>
                                       const SizedBox.shrink(),
@@ -301,6 +322,27 @@ class _RoomBonusPattiOverlayState extends State<RoomBonusPattiOverlay>
                         ),
                       ),
                     ),
+
+                    // The multiplier the roll hit, under the coins: the room
+                    // sees what the gift paid, not only how much.
+                    if (widget.data.bonusMultiplier > 1)
+                      Positioned(
+                        right: barW * 0.065,
+                        top: barH * 0.58,
+                        width: barW * 0.24,
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: _Gradient3DText(
+                            text: 'x${widget.data.bonusMultiplier}',
+                            fontSize: 13,
+                            colors: const [
+                              Color(0xFFDFFBFF),
+                              Color(0xFF7BE8FF),
+                              Color(0xFF17A9E0),
+                            ],
+                          ),
+                        ),
+                      ),
 
                     Positioned(
                       right: barW * 0.012,

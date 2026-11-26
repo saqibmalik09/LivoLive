@@ -19,7 +19,13 @@ class PromoBannerCarousel extends StatelessWidget {
     this.onBannerTap,
     this.onPageChanged,
     this.active = true,
+    this.gaplessPlayback = false,
   });
+
+  /// Paint slides through the gapless (pinnable) provider: a decoded slide
+  /// shows on the first frame, and one still loading shows the background
+  /// colour instead of a placeholder flash. Pair with [retainImageGroup].
+  final bool gaplessPlayback;
 
   static const double topAspectRatio = 1280 / 560;
 
@@ -101,6 +107,7 @@ class PromoBannerCarousel extends StatelessWidget {
                   transformHeight: transformHeight,
                   memCacheWidth: transformWidth,
                   memCacheHeight: transformHeight,
+                  gaplessPlayback: gaplessPlayback,
                   placeholder:
                       placeholder ??
                       (_, _) => ColoredBox(
