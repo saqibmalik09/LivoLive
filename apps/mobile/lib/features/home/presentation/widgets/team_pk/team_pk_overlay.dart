@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sk_live/core/providers/game_overlay_provider.dart';
 import 'package:sk_live/core/providers/team_pk_provider.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
@@ -93,6 +94,7 @@ class _TeamPkOverlayState extends ConsumerState<TeamPkOverlay> {
   @override
   Widget build(BuildContext context) {
     final sessionAsync = ref.watch(roomPkSessionProvider(widget.roomId));
+    final gameOpen = ref.watch(gameOverlayOpenProvider) > 0;
 
     return sessionAsync.when(
       data: (session) {
@@ -101,7 +103,9 @@ class _TeamPkOverlayState extends ConsumerState<TeamPkOverlay> {
           return const SizedBox.shrink();
         }
 
-        if (session.isActive) {
+        // Pause the 1s countdown while a room game covers the UI — the timer
+        // kept setState-ing under the WebView and added to busy-room jank.
+        if (session.isActive && !gameOpen) {
           _startTimer(session);
         } else {
           _stopTimer();

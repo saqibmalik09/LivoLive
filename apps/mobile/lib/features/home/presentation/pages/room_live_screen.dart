@@ -3977,7 +3977,14 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }
 
   void _applyOrbitSpeakerLevels(Map<String, double> levels) {
-    if (!mounted || !context.mounted || levels.isEmpty) return;
+    // Seat sound-waves rebuild the grid ~10×/s. Under an open game WebView that
+    // steals the frame budget and is why busy rooms hang only while gaming.
+    if (!mounted ||
+        !context.mounted ||
+        levels.isEmpty ||
+        ref.read(gameOverlayOpenProvider) > 0) {
+      return;
+    }
     var changed = false;
     levels.forEach((identity, level) {
       final userId = _userIdForOrbitIdentity(identity);
@@ -5964,9 +5971,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     super.activate();
     if (!_isLeavingRoom) {
       WidgetsBinding.instance.addObserver(this);
-      OrbitVoiceSessionService.setSpeakerLevelsHandler(
-        _applyOrbitSpeakerLevels,
-      );
+      if (ref.read(gameOverlayOpenProvider) == 0) {
+        OrbitVoiceSessionService.setSpeakerLevelsHandler(
+          _applyOrbitSpeakerLevels,
+        );
+      }
     }
   }
 
@@ -6399,6 +6408,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<void> _triggerEntranceShow(String userId, String username) async {
     final uid = _normalizePresenceUserId(userId);
     if (uid == null) return;
+    if (ref.read(gameOverlayOpenProvider) > 0) {
+      _entranceHandledUserIds.add(uid);
+      return;
+    }
 
     final selfId = _normalizePresenceUserId(
       ref.read(userProfileProvider).value?['id'] ??
@@ -6487,6 +6500,54 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
   }
 
+  bool _gameEffectsPaused = false;
+
+  /// While a room game WebView is open, stop the live-room visual work that
+  /// fights it for CPU/GPU. Outside the room the same games run fine; inside a
+  /// busy room the seat waves, gift flights, entrance SVGA and lucky overlays
+  /// kept running under the sheet and made the game hang.
+  void _syncPauseUnderGame(int openCount) {
+    final pause = openCount > 0;
+    if (pause == _gameEffectsPaused) return;
+    _gameEffectsPaused = pause;
+    if (pause) {
+      OrbitVoiceSessionService.setSpeakerLevelsHandler(null);
+      _giftFlightController.clearAll();
+      _micEmojiOverlayController.clearAll();
+      _fullScreenGiftQueue.clear();
+      if (_fullScreenGiftOverlayEntry?.mounted == true) {
+        _fullScreenGiftOverlayEntry!.remove();
+      }
+      _fullScreenGiftOverlayEntry = null;
+      _fullScreenGiftShowing = false;
+      if (_isEntranceAnimating) {
+        try {
+          _entranceController?.stop();
+        } catch (_) {}
+        _releaseEntrancePattiGate();
+        _isEntranceAnimating = false;
+        _entranceMediaReady = false;
+        _entrancePlaybackStarted = false;
+      }
+      if (_activeLuckyFanbis.isNotEmpty ||
+          _activeLuckyMultipliers.isNotEmpty ||
+          _bonusPatti != null) {
+        setState(() {
+          _activeLuckyFanbis.clear();
+          _activeLuckyMultipliers.clear();
+          _bonusPatti = null;
+          _bonusPattiVisible = false;
+        });
+      }
+      debugPrint('[ROOM] paused effects under game overlay');
+    } else if (!_isLeavingRoom && mounted) {
+      OrbitVoiceSessionService.setSpeakerLevelsHandler(
+        _applyOrbitSpeakerLevels,
+      );
+      debugPrint('[ROOM] resumed effects after game overlay');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     RoomFloatingBubbleService.micMuted = _isMuted;
@@ -6494,6 +6555,15 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     ref.watch(luckyBonusMultiplierSvgasProvider);
     ref.watch(luckyRoomSvgaFlagsProvider);
     ref.watch(myBusinessStaffProvider);
+    final gameOverlayOpen = ref.watch(gameOverlayOpenProvider);
+    ref.listen<int>(gameOverlayOpenProvider, (_, next) {
+      _syncPauseUnderGame(next);
+    });
+    if (gameOverlayOpen > 0 && !_gameEffectsPaused) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _syncPauseUnderGame(ref.read(gameOverlayOpenProvider));
+      });
+    }
 
     ref.listen<AsyncValue<List<Map<String, dynamic>>>>(roomInvitationProvider, (
       previous,
@@ -6543,7 +6613,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           onFullScreenSvga: _showFullScreenGift,
           child: Scaffold(
             backgroundColor: roomBackdropColor,
-            body: Stack(
+            // Stop seat SVGA / waves / entrance tickers while a game covers the
+            // room. Timers are paused separately; this cuts the animation cost
+            // that makes games hang only inside busy rooms.
+            body: TickerMode(
+              enabled: gameOverlayOpen == 0,
+              child: Stack(
               children: [
                 Positioned.fill(
                   child: _hasCustomBackground
@@ -6749,6 +6824,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                   ),
                 ),
               ],
+            ),
             ),
           ),
         ),
@@ -9523,6 +9599,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     String? dedupeKey,
   }) {
     if (imageUrl.isEmpty && (svgaUrl == null || svgaUrl.isEmpty)) return;
+    if (ref.read(gameOverlayOpenProvider) > 0) return;
 
     _micEmojiOverlayController.play(
       RoomMicEmojiOverlayRequest(
@@ -10557,6 +10634,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   }) {
     if (fanbi == null && multiplier == null) return;
     if (!mounted) return;
+    if (ref.read(gameOverlayOpenProvider) > 0) return;
 
     if (_seenLuckyFloatKeys.contains(baseId)) return;
     _seenLuckyFloatKeys.add(baseId);

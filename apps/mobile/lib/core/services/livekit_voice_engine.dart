@@ -175,7 +175,18 @@ class LiveKitVoiceEngine implements VoiceEngine {
   DateTime _sitIntentUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Set by the room screen whenever the user's own seat changes.
-  void setSeatPublishAllowed(bool onSeat) => _seatPublishAllowed = onSeat;
+  void setSeatPublishAllowed(bool onSeat) {
+    final wasOnSeat = _seatPublishAllowed;
+    _seatPublishAllowed = onSeat;
+    // Stepping off a seat: drop call-mode audio so a viewer with earbuds is
+    // back on media/A2DP instead of a dead SCO route.
+    if (wasOnSeat && !onSeat && _sessionPublishing == true) {
+      unawaited(() async {
+        await _applyAudioSessionFor(publishing: false);
+        await _reassertSpeakerRoute();
+      }());
+    }
+  }
 
   /// The user tapped a seat and is about to take it. Lets the prepared mic
   /// publish while the seat claim is still in flight; it lapses on its own.
@@ -350,12 +361,12 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _seatPublishAllowed = session.canPublish;
     clearSitIntent();
 
-    // The audio session type is decided once, here, from the grant in the
-    // token — call audio for someone who may speak, media playback for a
-    // listener. It used to be flipped on every mic toggle, and each flip
-    // handed routing back to Android (which picks the earpiece) and dropped
-    // playback to the much quieter call volume mid-room.
-    await _applyAudioSessionFor(publishing: session.canPublish);
+    // Always join as a listener (media playback). Call/communication mode is
+    // switched on the first mic enable below. Starting every join in call mode
+    // — including pure viewers, whose open tokens still carry canPublish —
+    // put Android on the Bluetooth SCO / call route with no media stream, so
+    // earbuds stayed silent until the user sat and unmuted.
+    await _applyAudioSessionFor(publishing: false);
     // #region agent log
     final dbgBeforeConnectMs = _dbgLoginSw.elapsedMilliseconds;
     // #endregion
@@ -377,6 +388,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
     Timer(const Duration(seconds: 1), () => unawaited(warmPublisher()));
 
     // The token's grant is authoritative; only publish if the server allowed it.
+    // setMicEnabled switches the session to communication and re-pins the route.
     if (_micIntent && canPublishNow) {
       await setMicEnabled(true);
     }
@@ -444,15 +456,24 @@ class LiveKitVoiceEngine implements VoiceEngine {
         // this, mute and unmute leave the session alone (see below).
         await _applyAudioSessionFor(publishing: true);
         await _reassertSpeakerRoute();
-        // Mode switch briefly drops headset from the enumerated list; re-pin
-        // after AudioSwitch settles so hands-free keeps the route.
+        // Mode switch briefly drops headset from the enumerated list, and
+        // Bluetooth SCO often needs a second pin after it appears. Re-assert
+        // twice so unmute does not leave the room on the loudspeaker.
         _postUnmuteRouteRetry?.cancel();
         _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 350), () {
           unawaited(_reassertSpeakerRoute());
+          _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 500), () {
+            unawaited(_reassertSpeakerRoute());
+          });
         });
       } else if (enabled) {
         // Later unmutes leave the session alone, but still re-pin so a wired /
         // Bluetooth headset that was present before mute is not left on speaker.
+        await _reassertSpeakerRoute();
+      } else if (!enabled && !_seatPublishAllowed) {
+        // Left the seat / muted as a viewer again: go back to media playback so
+        // earbuds use A2DP instead of a stale SCO call route.
+        await _applyAudioSessionFor(publishing: false);
         await _reassertSpeakerRoute();
       }
       // Just the microphone after the route is settled. Avoid flipping the
@@ -800,23 +821,49 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
   /// Re-apply the user's speaker choice after an audio session change.
   ///
-  /// Android routes communication-mode audio through AudioSwitch, whose
-  /// device priority is Bluetooth → wired headset → **earpiece** →
-  /// speakerphone. The earpiece outranks the speaker, so an unforced
-  /// preference loses and the room is heard from the receiver the moment the
-  /// mic goes live. Forcing is the only way to win that choice, so force —
-  /// but only when no headset is connected, because forcing would otherwise
-  /// yank audio out of the user's headphones.
+  /// Listener (media playback) and publisher (communication) need different
+  /// routes. Media already goes to a connected headset via A2DP / wired; the
+  /// communication path goes through AudioSwitch, whose device priority is
+  /// Bluetooth → wired headset → **earpiece** → speakerphone. The earpiece
+  /// outranks the speaker, so an unforced preference loses and the room is
+  /// heard from the receiver the moment the mic goes live. Forcing is the
+  /// only way to win that choice when publishing — but only with no headset,
+  /// because forcing would otherwise yank audio out of the headphones.
   Future<void> _reassertSpeakerRoute() async {
     try {
       final outputs = await _audioOutputDevices();
       final headsetNow = outputs.any(_isHeadsetDevice);
       // Empty enumeration right after unmute must not clear a known headset —
-      // that is what forced loudspeaker and muted hands-free.
+      // that is what forced loudspeaker and left hands-free silent.
       if (outputs.isNotEmpty) {
         _headsetPresent = headsetNow;
       }
       final headset = _headsetPresent || headsetNow;
+      final publishing = _sessionPublishing == true;
+
+      if (!publishing) {
+        // Viewer / mediaPlayback. Never call selectAudioOutput on Bluetooth
+        // here: that switches the phone onto SCO (call audio), and while the
+        // session is still mediaPlayback there is nothing on that channel —
+        // earbuds go silent. Leave speaker preference off so the OS keeps
+        // A2DP / wired media on the headset.
+        if (headset) {
+          await lk.AudioManager.instance.setSpeakerOutputPreferred(
+            false,
+            force: false,
+          );
+        } else if (_speakerOn) {
+          await lk.AudioManager.instance.setSpeakerOutputPreferred(
+            true,
+            force: false,
+          );
+        }
+        debugPrint(
+          '[LK] speaker route (listen): toggle=$_speakerOn headset=$headset '
+          'devices=${outputs.map((d) => '${d.deviceId}/${d.label}').toList()}',
+        );
+        return;
+      }
 
       // AudioSwitch picks the first available device from a preferred list,
       // and only the FORCED list puts the speaker ahead of the earpiece:
@@ -831,6 +878,8 @@ class LiveKitVoiceEngine implements VoiceEngine {
       final force = wantSpeaker;
 
       if (headset) {
+        // Clear any stuck forced-speaker preference from a previous unmute,
+        // then pin the Bluetooth / wired output for call audio (SCO).
         await lk.AudioManager.instance.setSpeakerOutputPreferred(
           false,
           force: false,
@@ -847,7 +896,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
         );
       }
       debugPrint(
-        '[LK] speaker route: pref=$wantSpeaker (toggle=$_speakerOn) '
+        '[LK] speaker route (publish): pref=$wantSpeaker (toggle=$_speakerOn) '
         'headset=$headset force=$force '
         'devices=${outputs.map((d) => '${d.deviceId}/${d.label}').toList()}',
       );

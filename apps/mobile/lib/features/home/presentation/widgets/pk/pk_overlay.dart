@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sk_live/core/providers/game_overlay_provider.dart';
 import 'package:sk_live/core/providers/team_pk_provider.dart';
 import 'package:sk_live/core/theme/app_colors.dart';
 import 'package:sk_live/core/util/number_formatter.dart';
@@ -104,6 +105,7 @@ class _PkOverlayState extends ConsumerState<PkOverlay> {
   @override
   Widget build(BuildContext context) {
     final sessionAsync = ref.watch(roomPkSessionProvider(widget.roomId));
+    final gameOpen = ref.watch(gameOverlayOpenProvider) > 0;
 
     return sessionAsync.when(
       data: (session) {
@@ -112,7 +114,7 @@ class _PkOverlayState extends ConsumerState<PkOverlay> {
           return const SizedBox.shrink();
         }
 
-        if (session.isActive) {
+        if (session.isActive && !gameOpen) {
           _startTimer(session);
         } else {
           _stopTimer();
