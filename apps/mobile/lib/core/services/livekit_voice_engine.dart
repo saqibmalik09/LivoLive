@@ -173,11 +173,16 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
   bool _seatPublishAllowed = false;
   DateTime _sitIntentUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  // Which room the seat flags above belong to. A connect that finishes after
+  // the user already tapped or took a seat in that room keeps them; without
+  // this the connect reset both and the first unmute was refused.
+  String? _seatStateRoomId;
 
   /// Set by the room screen whenever the user's own seat changes.
-  void setSeatPublishAllowed(bool onSeat) {
+  void setSeatPublishAllowed(bool onSeat, {String? roomId}) {
     final wasOnSeat = _seatPublishAllowed;
     _seatPublishAllowed = onSeat;
+    if (roomId != null) _seatStateRoomId = roomId;
     // Stepping off a seat: drop call-mode audio so a viewer with earbuds is
     // back on media/A2DP instead of a dead SCO route.
     if (wasOnSeat && !onSeat && _sessionPublishing == true) {
@@ -190,8 +195,9 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
   /// The user tapped a seat and is about to take it. Lets the prepared mic
   /// publish while the seat claim is still in flight; it lapses on its own.
-  void markSitIntent() {
+  void markSitIntent({String? roomId}) {
     _sitIntentUntil = DateTime.now().add(const Duration(seconds: 30));
+    if (roomId != null) _seatStateRoomId = roomId;
   }
 
   void clearSitIntent() {
@@ -271,7 +277,10 @@ class LiveKitVoiceEngine implements VoiceEngine {
       ..start();
     _dbgSpoke.clear();
     // #endregion
-    await logoutRoom();
+    // The old room is torn down in the background: waiting for its leave
+    // and peer-connection close put a few hundred ms in front of every
+    // room switch before the new room was even asked for.
+    _detachRoomForReplace();
 
     final room = lk.Room(
       roomOptions: const lk.RoomOptions(
@@ -358,8 +367,14 @@ class LiveKitVoiceEngine implements VoiceEngine {
     _appRoomId = session.appRoomId ?? session.orbitRoomId;
     // The token's own can_publish is seat-derived; it is the starting point for
     // an open token, and the room screen keeps it current from then on.
-    _seatPublishAllowed = session.canPublish;
-    clearSitIntent();
+    final seatStateHere =
+        _seatStateRoomId != null && _seatStateRoomId == _appRoomId;
+    _seatPublishAllowed =
+        session.canPublish || (seatStateHere && _seatPublishAllowed);
+    if (!seatStateHere) {
+      clearSitIntent();
+      _seatStateRoomId = _appRoomId;
+    }
 
     // Always join as a listener (media playback). Call/communication mode is
     // switched on the first mic enable below. Starting every join in call mode
@@ -395,6 +410,27 @@ class LiveKitVoiceEngine implements VoiceEngine {
     debugPrint(
       '[LK] joined room=${session.livekitRoom} publish=$canPublishNow',
     );
+  }
+
+  void _detachRoomForReplace() {
+    final room = _room;
+    final events = _events;
+    if (room == null && events == null) return;
+    _stopDeviceChangeWatch();
+    _room = null;
+    _events = null;
+    _appRoomId = null;
+    _lastSpeakers = <String>{};
+    unawaited(discardPrecapturedMic());
+    unawaited(() async {
+      try {
+        await events?.dispose();
+        await room?.disconnect();
+        await room?.dispose();
+      } catch (e) {
+        debugPrint('[LK] background logout: $e');
+      }
+    }());
   }
 
   @override
@@ -449,23 +485,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
     // #endregion
     try {
       if (enabled && _sessionPublishing != true) {
-        // First publish on a connection that was opened as a listener: the
-        // seat grant arrived in place, so there was no reconnect to pick the
-        // call-mode session. Switch once here, then re-pin the speaker because
-        // Android hands routing back to the earpiece on a mode change. After
-        // this, mute and unmute leave the session alone (see below).
-        await _applyAudioSessionFor(publishing: true);
-        await _reassertSpeakerRoute();
-        // Mode switch briefly drops headset from the enumerated list, and
-        // Bluetooth SCO often needs a second pin after it appears. Re-assert
-        // twice so unmute does not leave the room on the loudspeaker.
-        _postUnmuteRouteRetry?.cancel();
-        _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 350), () {
-          unawaited(_reassertSpeakerRoute());
-          _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 500), () {
-            unawaited(_reassertSpeakerRoute());
-          });
-        });
+        await _enterCallMode();
       } else if (enabled) {
         // Later unmutes leave the session alone, but still re-pin so a wired /
         // Bluetooth headset that was present before mute is not left on speaker.
@@ -664,8 +684,32 @@ class LiveKitVoiceEngine implements VoiceEngine {
   Future<void>? _prepareFlight;
   String? _preparedSid;
 
+  /// First publish on a connection that was opened as a listener: switch the
+  /// audio session to call mode once, then re-pin the speaker because Android
+  /// hands routing back to the earpiece on a mode change. After this, mute and
+  /// unmute leave the session alone.
+  Future<void> _enterCallMode() async {
+    if (_sessionPublishing == true) return;
+    await _applyAudioSessionFor(publishing: true);
+    await _reassertSpeakerRoute();
+    // Mode switch briefly drops headset from the enumerated list, and
+    // Bluetooth SCO often needs a second pin after it appears. Re-assert
+    // twice so unmute does not leave the room on the loudspeaker.
+    _postUnmuteRouteRetry?.cancel();
+    _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_reassertSpeakerRoute());
+      _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 500), () {
+        unawaited(_reassertSpeakerRoute());
+      });
+    });
+  }
+
   Future<void> _prepareNow(lk.Room room) async {
     final sw = Stopwatch()..start();
+    // The call-mode switch used to run on "Open Mic", in front of the unmute.
+    // Done here it overlaps the dialog. A dismissed dialog switches back in
+    // discardPrecapturedMic.
+    await _enterCallMode();
     await Future.wait<void>(<Future<void>>[warmPublisher(), precaptureMic()]);
     // #region agent log
     final dbgWarmCaptureMs = sw.elapsedMilliseconds;
@@ -721,6 +765,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
   /// was captured but not published, or a track published muted for a seat that
   /// was never taken (claim failed, "Keep Muted", dialog dismissed, timed out).
   Future<void> discardPrecapturedMic() async {
+    final roomAtStart = _room;
     _precaptureExpiry?.cancel();
     _precaptureExpiry = null;
     final track = _precapturedMic;
@@ -741,6 +786,20 @@ class LiveKitVoiceEngine implements VoiceEngine {
       } catch (e) {
         debugPrint('[LK] discard prepared publish: $e');
       }
+    }
+    // Prepared for a seat that was not taken: back to media playback so
+    // earbuds stay on A2DP. Nothing to undo if the mic is actually live.
+    final micLive =
+        _room?.localParticipant
+            ?.getTrackPublicationBySource(lk.TrackSource.microphone) !=
+        null;
+    if (roomAtStart != null &&
+        identical(_room, roomAtStart) &&
+        _sessionPublishing == true &&
+        !_seatPublishAllowed &&
+        !micLive) {
+      await _applyAudioSessionFor(publishing: false);
+      await _reassertSpeakerRoute();
     }
   }
 

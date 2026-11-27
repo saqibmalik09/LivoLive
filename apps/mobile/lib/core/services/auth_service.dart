@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -46,40 +48,124 @@ class AuthService {
     }
   }
 
+  // One client for the app's lifetime. A new instance per tap re-initialised
+  // Play services sign-in each time, and on a fresh install the first one
+  // could hand back the picked account before it was ready.
+  static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: AppConstants.googleWebClientId,
+    scopes: const ['email', 'profile', 'openid'],
+  );
+
   Future<AuthResponse> signInWithGoogle() async {
     try {
-      const webClientId = AppConstants.googleWebClientId;
-
-      final googleSignIn = GoogleSignIn(
-        serverClientId: webClientId,
-        scopes: const ['email', 'profile', 'openid'],
-      );
-
+      // Signing out first makes the account picker appear every time.
       try {
-        await googleSignIn.signOut();
+        await _googleSignIn.signOut();
       } catch (_) {}
 
-      final googleUser = await googleSignIn.signIn();
+      GoogleSignInAccount? googleUser;
+      Object? pickError;
+      try {
+        googleUser = await _googleSignIn.signIn();
+      } catch (e) {
+        pickError = e;
+        debugPrint('[GoogleAuth] signIn failed: $e');
+      }
+      // The first sign-in after install can report a cancel or an error even
+      // though the account was picked; the account is signed in on the device
+      // by then, which is why a second tap always worked. Ask for it quietly.
+      if (googleUser == null && !_isUserCancel(pickError)) {
+        googleUser = await _silentGoogleAccount();
+      }
       if (googleUser == null) {
+        if (pickError != null && !_isUserCancel(pickError)) throw pickError;
         throw 'Login cancelled by user';
       }
 
-      final googleAuth = await googleUser.authentication;
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
+      var idToken = await _googleIdToken(googleUser);
+      String? accessToken = _lastGoogleAccessToken;
+      if (idToken == null || idToken.isEmpty) {
+        // First consent on a new install can return the account before its
+        // tokens; clearing the cache and asking again fetches them.
+        debugPrint('[GoogleAuth] no idToken on first try, retrying');
+        try {
+          await googleUser.clearAuthCache();
+        } catch (_) {}
+        final again = await _silentGoogleAccount() ?? googleUser;
+        idToken = await _googleIdToken(again);
+        accessToken = _lastGoogleAccessToken;
+      }
       if (idToken == null || idToken.isEmpty) {
         throw 'No ID Token from Google. Check Web client ID + Android SHA-1 '
             '(Play App Signing) on the same Cloud project as the Web client.';
       }
 
-      return await _client.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
+      return await _signInWithGoogleIdToken(idToken, accessToken);
     } catch (e) {
+      debugPrint('[GoogleAuth] failed: $e');
       throw _mapGoogleSignInError(e);
+    }
+  }
+
+  String? _lastGoogleAccessToken;
+
+  Future<String?> _googleIdToken(GoogleSignInAccount account) async {
+    try {
+      final auth = await account.authentication;
+      _lastGoogleAccessToken = auth.accessToken;
+      return auth.idToken;
+    } catch (e) {
+      debugPrint('[GoogleAuth] authentication failed: $e');
+      _lastGoogleAccessToken = null;
+      return null;
+    }
+  }
+
+  Future<GoogleSignInAccount?> _silentGoogleAccount() async {
+    try {
+      return _googleSignIn.currentUser ??
+          await _googleSignIn.signInSilently(reAuthenticate: true);
+    } catch (e) {
+      debugPrint('[GoogleAuth] signInSilently failed: $e');
+      return null;
+    }
+  }
+
+  static bool _isUserCancel(Object? e) {
+    if (e == null) return false;
+    final s = e.toString().toLowerCase();
+    return s.contains('12501') ||
+        s.contains('sign_in_canceled') ||
+        s.contains('sign_in_cancelled');
+  }
+
+  /// The first request after install also pays for DNS and TLS to Supabase;
+  /// a timeout or dropped connection there gets one more attempt with the
+  /// same token instead of failing the whole login.
+  Future<AuthResponse> _signInWithGoogleIdToken(
+    String idToken,
+    String? accessToken,
+  ) async {
+    for (var attempt = 1; ; attempt++) {
+      try {
+        return await _client.auth.signInWithIdToken(
+          provider: OAuthProvider.google,
+          idToken: idToken,
+          accessToken: accessToken,
+        );
+      } catch (e) {
+        final s = e.toString().toLowerCase();
+        final transient =
+            e is TimeoutException ||
+            s.contains('socketexception') ||
+            s.contains('clientexception') ||
+            s.contains('connection') ||
+            s.contains('timed out') ||
+            s.contains('failed host lookup');
+        if (!transient || attempt >= 2) rethrow;
+        debugPrint('[GoogleAuth] Supabase sign-in retry after: $e');
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      }
     }
   }
 
@@ -269,7 +355,7 @@ class AuthService {
     try {
       await Future.wait([
         _client.auth.signOut(),
-        GoogleSignIn(serverClientId: AppConstants.googleWebClientId).signOut(),
+        _googleSignIn.signOut(),
         FacebookAuth.instance.logOut(),
       ]);
     } catch (_) {

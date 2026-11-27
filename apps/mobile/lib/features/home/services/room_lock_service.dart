@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/staff_provider.dart';
 import 'package:sk_live/core/services/room_floating_bubble_service.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
 import 'package:sk_live/core/services/orbit_voice_session_service.dart';
+import 'package:sk_live/core/util/app_constants.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/features/home/services/room_realtime_socket.dart';
 import 'package:sk_live/core/widgets/room_background_media.dart';
 import 'package:sk_live/features/home/presentation/pages/room_live_screen.dart';
 
@@ -30,6 +34,8 @@ final Map<String, DateTime> _roomUnlockUntil = {};
 void _markRoomUnlocked(String roomId) {
   _roomUnlockUntil[roomId] = DateTime.now().add(const Duration(seconds: 90));
 }
+
+bool roomRecentlyUnlocked(String roomId) => _wasRecentlyUnlocked(roomId);
 
 bool _wasRecentlyUnlocked(String roomId) {
   final until = _roomUnlockUntil[roomId];
@@ -162,6 +168,34 @@ Future<void> openRoomLive(
   if (!context.mounted) return;
   // Backdrop decode starts on the tap, in parallel with the route push.
   precacheRoomBackground(context, room['background_url']?.toString());
+  // Seats and voice start on the tap too, not after the room screen has been
+  // built: the gateway join and the LiveKit connect overlap the first frames.
+  final mayStartEarly =
+      roomId != null &&
+      roomId.isNotEmpty &&
+      (!roomIsLocked(room) || roomRecentlyUnlocked(roomId));
+  if (mayStartEarly) {
+    if (AppConstants.useRealtimeGateway) {
+      Map<String, dynamic>? me;
+      try {
+        me = ProviderScope.containerOf(
+          context,
+          listen: false,
+        ).read(userProfileProvider).value;
+      } catch (_) {}
+      if (me != null && me['id'] != null) {
+        RoomRealtimeSocket.instance.prejoinRoom(
+          roomId: roomId,
+          user: {
+            'id': me['id'],
+            'username': me['username'],
+            'avatar_url': me['avatar_url'],
+          },
+        );
+      }
+    }
+    OrbitVoiceSessionService.prefetchSession(roomId);
+  }
 
   final route = PageRouteBuilder<void>(
     pageBuilder: (_, _, _) => ColoredBox(
@@ -179,7 +213,6 @@ Future<void> openRoomLive(
   // so the tap sat on the listing until they returned.
   if (roomId != null && roomId.isNotEmpty) {
     Future<void>(() {
-      OrbitVoiceSessionService.prefetchSession(roomId);
       OrbitVoiceSessionService.claimPrefetch(roomId);
       unawaited(RoomFloatingBubbleService.hideRoomBubble());
       unawaited(AppTelemetry.setContext(roomId: roomId, screen: 'room_live'));

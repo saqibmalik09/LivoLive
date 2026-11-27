@@ -36,6 +36,17 @@ class RoomRealtimeSocket {
   // waits on this instead of sending the same join a second time.
   Future<Map<String, dynamic>?>? _rejoinFlight;
   String? _rejoinFlightRoomId;
+  // Any room:join still waiting on its ack. A second join for the same room
+  // shares it instead of making the gateway run the join twice.
+  Future<Map<String, dynamic>?>? _joinFlight;
+  String? _joinFlightRoomId;
+  // A join started from the room tap, before the room screen is listening.
+  // Snapshots and events that arrive in that gap are held here, in order,
+  // until the screen claims them; otherwise the first seat list is lost.
+  String? _prejoinRoomId;
+  final List<MapEntry<String, Map<String, dynamic>>> _prejoinBuffer = [];
+  static const int _prejoinBufferMax = 120;
+  static const String prejoinSnapshotKey = '__snapshot__';
   // LiveKit session handed to us by a join or sit ack, waiting to be consumed
   // by the voice engine. See takeVoiceSession.
   Map<String, dynamic>? _prefetchedVoice;
@@ -246,11 +257,14 @@ class RoomRealtimeSocket {
         final event = envelope['event']?.toString() ?? '';
         final data = _asMap(envelope['data']) ?? envelope;
         if (event.isEmpty) return;
+        _bufferPrejoin(event, data);
         onEvent?.call(event, data);
       })
       ..on('room:snapshot', (raw) {
         final snap = _asMap(raw);
-        if (snap != null) onSnapshot?.call(snap);
+        if (snap == null) return;
+        _bufferPrejoin(prejoinSnapshotKey, snap);
+        onSnapshot?.call(snap);
       })
       ..on('global:win', (raw) {
         final envelope = _asMap(raw);
@@ -365,6 +379,53 @@ class RoomRealtimeSocket {
     }
   }
 
+  /// Starts the gateway join from the room tap, so the seat snapshot is on its
+  /// way while the room screen is still being built. The screen's own
+  /// [joinRoom] then shares this join and [claimPrejoin] hands it whatever
+  /// arrived before it was listening.
+  void prejoinRoom({
+    required String roomId,
+    required Map<String, dynamic> user,
+  }) {
+    if (roomId.isEmpty || isJoinedTo(roomId)) return;
+    if (_joinFlight != null && _joinFlightRoomId == roomId) return;
+    _prejoinRoomId = roomId;
+    _prejoinBuffer.clear();
+    unawaited(() async {
+      try {
+        await joinRoom(roomId: roomId, user: user);
+      } catch (e) {
+        debugPrint('[Gateway] prejoin room=$roomId failed: $e');
+      }
+    }());
+  }
+
+  bool isPrejoined(String roomId) => _prejoinRoomId == roomId;
+
+  /// Snapshots (keyed [prejoinSnapshotKey]) and events received for a
+  /// tap-time join, oldest first. Clears the buffer; later traffic goes
+  /// straight to the handlers.
+  List<MapEntry<String, Map<String, dynamic>>> claimPrejoin(String roomId) {
+    if (_prejoinRoomId != roomId) return const [];
+    _prejoinRoomId = null;
+    final buffered = List<MapEntry<String, Map<String, dynamic>>>.of(
+      _prejoinBuffer,
+    );
+    _prejoinBuffer.clear();
+    return buffered;
+  }
+
+  void _bufferPrejoin(String key, Map<String, dynamic> data) {
+    if (_prejoinRoomId == null) return;
+    if (_prejoinBuffer.length >= _prejoinBufferMax) _prejoinBuffer.removeAt(0);
+    _prejoinBuffer.add(MapEntry(key, data));
+  }
+
+  void _clearPrejoin() {
+    _prejoinRoomId = null;
+    _prejoinBuffer.clear();
+  }
+
   Future<Map<String, dynamic>?> joinRoom({
     required String roomId,
     required Map<String, dynamic> user,
@@ -373,7 +434,41 @@ class RoomRealtimeSocket {
     String? carSvga,
     String? pattiSvga,
     String? pattiUrl,
+  }) {
+    final inFlight = _joinFlight;
+    if (inFlight != null && _joinFlightRoomId == roomId) return inFlight;
+    final flight = _joinRoomOnce(
+      roomId: roomId,
+      user: user,
+      eventId: eventId,
+      snapshotRequest: snapshotRequest,
+      carSvga: carSvga,
+      pattiSvga: pattiSvga,
+      pattiUrl: pattiUrl,
+    );
+    _joinFlight = flight;
+    _joinFlightRoomId = roomId;
+    void clear() {
+      if (identical(_joinFlight, flight)) {
+        _joinFlight = null;
+        _joinFlightRoomId = null;
+      }
+    }
+
+    unawaited(flight.then<void>((_) => clear(), onError: (Object _) => clear()));
+    return flight;
+  }
+
+  Future<Map<String, dynamic>?> _joinRoomOnce({
+    required String roomId,
+    required Map<String, dynamic> user,
+    String? eventId,
+    bool snapshotRequest = true,
+    String? carSvga,
+    String? pattiSvga,
+    String? pattiUrl,
   }) async {
+    if (_prejoinRoomId != null && _prejoinRoomId != roomId) _clearPrejoin();
     _pendingRoomId = roomId;
     _pendingUser = Map<String, dynamic>.from(user);
     _joinedUser = Map<String, dynamic>.from(user);
@@ -448,6 +543,7 @@ class RoomRealtimeSocket {
     required String roomId,
     required Map<String, dynamic> user,
   }) async {
+    if (_prejoinRoomId == roomId) _clearPrejoin();
     if (_pendingRoomId == roomId) {
       _pendingRoomId = null;
       _pendingUser = null;
@@ -504,6 +600,9 @@ class RoomRealtimeSocket {
   ///
   /// One-shot: taking it clears it, so a stale token is never reused after the
   /// user's seat state has changed.
+  bool hasVoiceSession(String roomId) =>
+      _prefetchedVoiceRoomId == roomId && _prefetchedVoice != null;
+
   Map<String, dynamic>? takeVoiceSession(String roomId) {
     if (_prefetchedVoiceRoomId != roomId) return null;
     final session = _prefetchedVoice;
@@ -711,6 +810,7 @@ class RoomRealtimeSocket {
     _pendingUser = null;
     _joinedRoomId = null;
     _joinedUser = null;
+    _clearPrejoin();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempt = 0;

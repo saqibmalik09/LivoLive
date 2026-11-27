@@ -82,15 +82,112 @@ class OrbitVoiceSessionService {
     void Function(Map<String, double> levels)? handler,
   ) => _e.setSpeakerLevelsHandler(handler);
 
+  // Listener session minted on the room tap, and the LiveKit connect started
+  // from it, so neither waits for the room screen to build, the profile, or
+  // the room:join ack. The screen's fetchSession / connect pick them up.
+  static Future<Map<String, dynamic>?>? _earlySession;
+  static String? _earlyRoomId;
+  static Stopwatch? _earlyWatch;
+  static Future<bool>? _preconnect;
+  static String? _preconnectRoomId;
+  static String? _preconnectToken;
+  static bool _preconnectCancelled = false;
+  static const _earlySessionMaxAge = Duration(seconds: 30);
+
   static void prefetchSession(String roomId) {
     _wireFetcher();
     _e.prefetchSession(roomId);
+    if (roomId.isEmpty || _e.isLiveForRoom(roomId)) return;
+    if (_earlyRoomId == roomId && _earlySession != null) return;
+    _earlyRoomId = roomId;
+    final watch = Stopwatch()..start();
+    _earlyWatch = watch;
+    final session = _mintEarlySession(roomId);
+    _earlySession = session;
+    _preconnectRoomId = roomId;
+    _preconnectToken = null;
+    _preconnectCancelled = false;
+    _preconnect = session.then((map) async {
+      if (_preconnectRoomId != roomId || _preconnectCancelled) return false;
+      final token = map?['token']?.toString() ?? '';
+      final url = map?['livekit_url']?.toString() ?? '';
+      if (map == null || map['error'] != null || token.isEmpty || url.isEmpty) {
+        return false;
+      }
+      debugPrint('[VOICE-OPEN] token ms=${watch.elapsedMilliseconds}');
+      _preconnectToken = token;
+      // A mic intent left over from the previous room must not open the mic
+      // here; the room screen turns it on itself once it knows the seat.
+      _e.setMicIntent(false);
+      final ok = await _connectNow(
+        livekitUrl: url,
+        token: token,
+        skLiveRoomId: roomId,
+        canPublish: map['can_publish'] == true,
+      );
+      final ms = watch.elapsedMilliseconds;
+      debugPrint('[VOICE-OPEN] connected=$ok ms=$ms');
+      if (ms > 1500) AppTelemetry.log('SLOW voice_open ${ms}ms');
+      if (_preconnectCancelled && _e.connectedAppRoomId == roomId) {
+        await _e.logoutRoom();
+        return false;
+      }
+      return ok;
+    }, onError: (Object e) {
+      debugPrint('[VOICE-OPEN] preconnect failed: $e');
+      return false;
+    });
+  }
+
+  static Future<Map<String, dynamic>?> _mintEarlySession(String roomId) async {
+    final socket = RoomRealtimeSocket.instance;
+    if (AppConstants.useRealtimeGateway && !socket.isConnected) {
+      // Waiting a moment for the socket is far cheaper than the edge-function
+      // fallback fetchSession takes when it finds the socket down.
+      try {
+        await socket.ensureConnected().timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
+    return _fetchSessionDirect(roomId: roomId, openMic: false, onSeat: false);
+  }
+
+  /// The tap-time session, once, if it is still fresh.
+  static Future<Map<String, dynamic>?> _takeEarlySession(String roomId) async {
+    if (_earlyRoomId != roomId) return null;
+    final session = _earlySession;
+    final age = _earlyWatch?.elapsed;
+    _earlySession = null;
+    _earlyRoomId = null;
+    if (session == null || age == null || age > _earlySessionMaxAge) {
+      return null;
+    }
+    try {
+      return await session.timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void _cancelEarly(String? roomId) {
+    if (roomId != null && _earlyRoomId != null && _earlyRoomId != roomId) {
+      return;
+    }
+    _earlySession = null;
+    _earlyRoomId = null;
+    if (roomId == null || _preconnectRoomId == roomId) {
+      _preconnectCancelled = true;
+      _preconnect = null;
+      _preconnectRoomId = null;
+      _preconnectToken = null;
+    }
   }
 
   static void claimPrefetch(String roomId) => _e.claimPrefetch(roomId);
 
-  static void clearPrefetch({String? roomId}) =>
-      _e.clearPrefetch(roomId: roomId);
+  static void clearPrefetch({String? roomId}) {
+    _cancelEarly(roomId);
+    _e.clearPrefetch(roomId: roomId);
+  }
 
   static Future<Map<String, dynamic>?> fetchSessionCached({
     required String roomId,
@@ -123,6 +220,48 @@ class OrbitVoiceSessionService {
   /// gets call-mode capture and a listener gets media-volume playback without
   /// anything being flipped mid-room.
   static Future<bool> connect({
+    required String livekitUrl,
+    required String token,
+    bool forceReconnect = false,
+    String? skLiveRoomId,
+    bool canPublish = false,
+  }) async {
+    final pre = _preconnect;
+    if (pre != null) {
+      final sameSession =
+          _preconnectRoomId == skLiveRoomId && _preconnectToken == token;
+      if (sameSession && !forceReconnect) {
+        _preconnect = null;
+        _preconnectRoomId = null;
+        _preconnectToken = null;
+        // Already connecting (or connected) on this exact token since the tap.
+        if (await pre) return true;
+      } else {
+        // Let the tap-time connect settle first: two logins at once tear each
+        // other's room down.
+        try {
+          await pre.timeout(const Duration(seconds: 4));
+        } catch (_) {}
+        _preconnect = null;
+        _preconnectRoomId = null;
+        _preconnectToken = null;
+        if (!forceReconnect && isLiveForRoom(skLiveRoomId ?? '')) {
+          // Different token, same room, already live: the room screen asked
+          // for an identical listener session; reconnecting buys nothing.
+          if (!canPublish || canPublishNow) return true;
+        }
+      }
+    }
+    return _connectNow(
+      livekitUrl: livekitUrl,
+      token: token,
+      forceReconnect: forceReconnect,
+      skLiveRoomId: skLiveRoomId,
+      canPublish: canPublish,
+    );
+  }
+
+  static Future<bool> _connectNow({
     required String livekitUrl,
     required String token,
     bool forceReconnect = false,
@@ -167,7 +306,10 @@ class OrbitVoiceSessionService {
     });
   }
 
-  static Future<void> disconnect() => _e.logoutRoom();
+  static Future<void> disconnect() {
+    _cancelEarly(null);
+    return _e.logoutRoom();
+  }
 
   static bool get noiseCancellationEnabled => _e.noiseCancellationEnabled;
 
@@ -245,9 +387,49 @@ class OrbitVoiceSessionService {
     Duration timeout = const Duration(milliseconds: 2500),
   }) => _e.waitForPublishPermission(timeout: timeout);
 
+  /// Resolves once voice is connected to [roomId] (true), or false after
+  /// [timeout]. A seat tapped right after entering lands while the connect is
+  /// still running; the seat's voice work waits for it instead of skipping.
+  static Future<bool> waitUntilLive(
+    String roomId, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (isLiveForRoom(roomId)) return true;
+    final deadline = DateTime.now().add(timeout);
+    final pre = _preconnect;
+    if (pre != null && _preconnectRoomId == roomId) {
+      try {
+        await pre.timeout(timeout);
+      } catch (_) {}
+    }
+    while (!isLiveForRoom(roomId) && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+    return isLiveForRoom(roomId);
+  }
+
+  // Bumped whenever a pending prepare should be dropped (dialog dismissed,
+  // claim failed), so a prepare still waiting on the connect does not open
+  // the mic afterwards for a seat nobody took.
+  static int _prepareGen = 0;
+
   /// Start connecting the publisher transport before the first publish.
   static void warmPublisher() =>
       unawaited(LiveKitVoiceEngine.instance.warmPublisher());
+
+  static void _whenLive(String? roomId, void Function() run) {
+    final id = roomId ?? connectedSkLiveRoomId;
+    if (id == null || id.isEmpty || isLiveForRoom(id)) {
+      run();
+      return;
+    }
+    final gen = _prepareGen;
+    unawaited(() async {
+      if (!await waitUntilLive(id)) return;
+      if (gen != _prepareGen) return;
+      run();
+    }());
+  }
 
   /// Open the microphone before the publish grant arrives. Needs the OS mic
   /// permission to be granted already.
@@ -257,8 +439,13 @@ class OrbitVoiceSessionService {
   /// Connect the publisher, open the mic and publish it muted as soon as the
   /// gateway's early grant lands, so taking the seat is just an unmute. Needs
   /// the OS mic permission already.
-  static void prepareToSpeak() =>
-      unawaited(LiveKitVoiceEngine.instance.prepareToSpeak());
+  static void prepareToSpeak({String? roomId}) => _whenLive(
+    roomId,
+    () => unawaited(LiveKitVoiceEngine.instance.prepareToSpeak()),
+  );
+
+  /// [warmPublisher] for a seat tap that may land before voice is connected.
+  static void warmPublisherFor(String roomId) => _whenLive(roomId, warmPublisher);
 
   /// Remove the microphone publication (seat left). The gateway revokes
   /// publish, so the connection stays up.
@@ -266,14 +453,21 @@ class OrbitVoiceSessionService {
       LiveKitVoiceEngine.instance.unpublishMic();
 
   /// Seat state for the speak permission. See LiveKitVoiceEngine.canPublishNow.
-  static void setSeatPublishAllowed(bool onSeat) =>
-      LiveKitVoiceEngine.instance.setSeatPublishAllowed(onSeat);
-  static void markSitIntent() => LiveKitVoiceEngine.instance.markSitIntent();
-  static void clearSitIntent() => LiveKitVoiceEngine.instance.clearSitIntent();
+  static void setSeatPublishAllowed(bool onSeat, {String? roomId}) => LiveKitVoiceEngine
+      .instance
+      .setSeatPublishAllowed(onSeat, roomId: roomId);
+  static void markSitIntent({String? roomId}) =>
+      LiveKitVoiceEngine.instance.markSitIntent(roomId: roomId);
+  static void clearSitIntent() {
+    _prepareGen++;
+    LiveKitVoiceEngine.instance.clearSitIntent();
+  }
 
   /// Release whatever [prepareToSpeak] set up and was not used.
-  static void discardPrecapturedMic() =>
-      unawaited(LiveKitVoiceEngine.instance.discardPrecapturedMic());
+  static void discardPrecapturedMic() {
+    _prepareGen++;
+    unawaited(LiveKitVoiceEngine.instance.discardPrecapturedMic());
+  }
 
   static Future<void> setRemoteVolume(double volume) =>
       _e.setRemoteVolume(volume);
@@ -294,6 +488,7 @@ class OrbitVoiceSessionService {
 
   static Future<void> stopPublishAndLeave({required String roomId}) {
     _wireFetcher();
+    _cancelEarly(roomId);
     return _e.stopPublishAndLeave(roomId: roomId);
   }
 
@@ -339,6 +534,37 @@ class OrbitVoiceSessionService {
   }
 
   static Future<Map<String, dynamic>?> fetchSession({
+    required String roomId,
+    required bool openMic,
+    bool onSeat = false,
+    bool billingOnly = false,
+    bool leaveSeat = false,
+  }) async {
+    if (!billingOnly &&
+        !leaveSeat &&
+        !RoomRealtimeSocket.instance.hasVoiceSession(roomId)) {
+      final early = await _takeEarlySession(roomId);
+      if (early != null && early['error'] == null) {
+        final grantsPublish = early['can_publish'] == true;
+        if (grantsPublish || !(openMic || onSeat)) {
+          debugPrint(
+            '[ORBIT] using tap-time session room=$roomId '
+            'publish=$grantsPublish',
+          );
+          return early;
+        }
+      }
+    }
+    return _fetchSessionDirect(
+      roomId: roomId,
+      openMic: openMic,
+      onSeat: onSeat,
+      billingOnly: billingOnly,
+      leaveSeat: leaveSeat,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> _fetchSessionDirect({
     required String roomId,
     required bool openMic,
     bool onSeat = false,

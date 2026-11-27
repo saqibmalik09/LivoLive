@@ -399,6 +399,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   // on a real device instead of guessed.
   final Stopwatch _roomOpenWatch = Stopwatch()..start();
   bool _firstSeatsLogged = false;
+  bool _firstVoiceLogged = false;
+  RoomGatewayEventHandler? _gatewayEventHandler;
+  RoomGatewaySnapshotHandler? _gatewaySnapshotHandler;
+  RoomGatewaySnapshotHandler? _initialSnapshotHandler;
   static const Duration _snapshotDedupeWindow = Duration(seconds: 2);
 
   DateTime? _localUnmuteGuardUntil;
@@ -410,7 +414,10 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   int? get _mySeatIndex => _mySeatIndexValue;
   set _mySeatIndex(int? value) {
     _mySeatIndexValue = value;
-    OrbitVoiceSessionService.setSeatPublishAllowed(value != null);
+    OrbitVoiceSessionService.setSeatPublishAllowed(
+      value != null,
+      roomId: widget.room['id']?.toString(),
+    );
   }
   String _activeTab = 'chat';
 
@@ -733,12 +740,16 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         minimizedAtLaunch != null &&
         minimizedAtLaunch['id'].toString() == roomId;
     final sameKeepAlive = RoomMinimizedKeepAlive.roomId == roomId;
+    // A join started from the room tap is a fresh entry, not a resume, even
+    // if its ack is already back.
     final sameSocket =
         AppConstants.useRealtimeGateway &&
-        RoomRealtimeSocket.instance.joinedRoomId == roomId;
+        RoomRealtimeSocket.instance.joinedRoomId == roomId &&
+        !RoomRealtimeSocket.instance.isPrejoined(roomId);
     _resumingMinimizedSession = sameMinimized || sameKeepAlive || sameSocket;
 
-    if (!_resumingMinimizedSession) {
+    if (!_resumingMinimizedSession &&
+        (!roomIsLocked(widget.room) || roomRecentlyUnlocked(roomId))) {
       OrbitVoiceSessionService.prefetchSession(roomId);
       OrbitVoiceSessionService.claimPrefetch(roomId);
     }
@@ -965,6 +976,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         if (!mounted) return;
         _applyGatewaySnapshot(snap);
       };
+      _initialSnapshotHandler = RoomRealtimeSocket.instance.onSnapshot;
     }
 
     _initSeats(
@@ -1534,6 +1546,22 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (!mounted) return;
       _applyGatewaySnapshot(snap);
     };
+    _gatewayEventHandler = socket.onEvent;
+    _gatewaySnapshotHandler = socket.onSnapshot;
+
+    // What the tap-time join received before this screen was listening, in
+    // arrival order. Entrance effects stay quiet for it like any join burst.
+    final early = socket.claimPrejoin(roomId);
+    if (early.isNotEmpty) {
+      _presenceSnapshotBootstrap = true;
+      for (final entry in early) {
+        if (entry.key == RoomRealtimeSocket.prejoinSnapshotKey) {
+          _applyGatewaySnapshot(entry.value);
+        } else {
+          _dispatchGatewayRoomEvent(entry.key, entry.value);
+        }
+      }
+    }
 
     try {
       await socket.ensureConnected();
@@ -3739,13 +3767,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         debugPrint('[ORBIT] init publish granted in place — no reconnect');
         await OrbitVoiceSessionService.primeMicIfNeeded();
       }
-      final ok = await OrbitVoiceSessionService.connect(
-        livekitUrl: url,
-        token: token,
-        forceReconnect: forceReconnect,
-        skLiveRoomId: roomId,
-        canPublish: canPublish,
-      );
+      // Already live in this room and allowed to publish (open token plus
+      // the seat): a new token changes nothing, and reconnecting for it
+      // tore down the connection the user was about to speak on.
+      final keepLive =
+          wasConnected &&
+          !forceReconnect &&
+          (!wantPublish || OrbitVoiceSessionService.canPublishNow);
+      final ok =
+          keepLive ||
+          await OrbitVoiceSessionService.connect(
+            livekitUrl: url,
+            token: token,
+            forceReconnect: forceReconnect,
+            skLiveRoomId: roomId,
+            canPublish: canPublish,
+          );
+      if (keepLive) debugPrint('[ORBIT] init keep live connection, no reconnect');
       var connected = ok;
       if (!connected) {
         debugPrint('[ORBIT] connect failed — one retry');
@@ -3775,6 +3813,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
       _orbitCanPublish = canPublish || OrbitVoiceSessionService.canPublishNow;
       _zegoLoginReady = true;
+      if (!_firstVoiceLogged) {
+        _firstVoiceLogged = true;
+        final ms = _roomOpenWatch.elapsedMilliseconds;
+        debugPrint('[ROOM-OPEN] voice connected ms=$ms');
+        if (ms > 1500) AppTelemetry.log('SLOW room_voice_connected ${ms}ms');
+      }
       _zegoRoomId = session['livekit_room']?.toString() ?? roomId;
       RoomVoiceSessionService.markLoggedIn(_zegoRoomId!);
       _noteOrbitBilling(openMic);
@@ -3914,16 +3958,21 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             debugPrint('[VOICE] backend cfg skipped: $e');
           }),
     );
+    // The voice token is issued against the signed-in session, not the
+    // profile row, so a profile still loading must not hold up hearing the
+    // room.
     Map<String, dynamic>? user = ref.read(userProfileProvider).value;
-    if (user == null) {
+    if (user == null &&
+        Supabase.instance.client.auth.currentUser == null) {
       try {
         user = await ref.read(userProfileProvider.future);
       } catch (e) {
         debugPrint('[ZEGO_INIT] profile load failed: $e');
         return;
       }
+      if (user == null) return;
     }
-    if (!mounted || user == null) return;
+    if (!mounted) return;
 
     if (_useOrbitVoice) {
       RoomMinimizedKeepAlive.relinquishOrbitHeal();
@@ -6048,8 +6097,16 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
           debugPrint('[RoomLive] dispose leaveRoom failed: $e');
         }
       }());
-      RoomRealtimeSocket.instance.onEvent = null;
-      RoomRealtimeSocket.instance.onSnapshot = null;
+      // Only our own handlers: on a room switch the next room's screen has
+      // usually installed its handlers before this one is disposed.
+      final socket = RoomRealtimeSocket.instance;
+      if (identical(socket.onEvent, _gatewayEventHandler)) {
+        socket.onEvent = null;
+      }
+      if (identical(socket.onSnapshot, _gatewaySnapshotHandler) ||
+          identical(socket.onSnapshot, _initialSnapshotHandler)) {
+        socket.onSnapshot = null;
+      }
     }
 
     if (keepZegoAlive) {
@@ -8906,7 +8963,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     if (roomId == null || !_useOrbitVoice) return;
     // With an open voice token this is the whole permission step: the mic may
     // publish now, while the seat claim is still on its way.
-    OrbitVoiceSessionService.markSitIntent();
+    OrbitVoiceSessionService.markSitIntent(roomId: roomId);
     // #region agent log
     final dbgPrepareSw = Stopwatch()..start();
     // #endregion
@@ -8925,10 +8982,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
             // #endregion
           }),
     );
-    OrbitVoiceSessionService.warmPublisher();
+    // Right after entering, voice may still be connecting; these wait for it
+    // rather than doing nothing and leaving the whole mic start for later.
+    OrbitVoiceSessionService.warmPublisherFor(roomId);
     unawaited(
       Permission.microphone.isGranted.then((granted) {
-        if (granted) OrbitVoiceSessionService.prepareToSpeak();
+        if (granted) OrbitVoiceSessionService.prepareToSpeak(roomId: roomId);
       }),
     );
   }
@@ -9032,7 +9091,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
     // Covers the first-ever grant (permission was only just given) and is a
     // no-op when the tap-time prepare already ran.
-    if (wantOpenMic) OrbitVoiceSessionService.prepareToSpeak();
+    if (wantOpenMic) {
+      OrbitVoiceSessionService.prepareToSpeak(roomId: widget.room['id']?.toString());
+    }
     devLog(
       '[SEAT] sitDown confirmed openMic=$wantOpenMic '
       'ms=${sitSw.elapsedMilliseconds}',
@@ -9097,12 +9158,25 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     // and unpublishes again in the rollback below.
     // If the grant has not landed yet (confirmed faster than the prepare), it is
     // awaited here instead of waiting for the claim ack to start.
-    if (wantOpenMic && OrbitVoiceSessionService.isConnected) {
+    // Voice still connecting (seat tapped right after entering) is waited
+    // for here too; skipping it left the mic for after the claim, cold.
+    if (wantOpenMic) {
+      final voiceRoomId = roomId.toString();
       unawaited(() async {
+        if (!await OrbitVoiceSessionService.waitUntilLive(voiceRoomId)) return;
+        if (!mounted || _isMuted || _mySeatIndex != index) return;
         if (await OrbitVoiceSessionService.waitForPublishPermission(
-          timeout: const Duration(seconds: 3),
-        )) {
-          await OrbitVoiceSessionService.setMicEnabled(true);
+              timeout: const Duration(seconds: 3),
+            ) &&
+            mounted &&
+            !_isMuted &&
+            _mySeatIndex == index) {
+          final ok = await OrbitVoiceSessionService.setMicEnabled(true);
+          if (ok && mounted && !_isMuted && _mySeatIndex == index) {
+            _orbitCanPublish = true;
+            _isLocalPublishing = true;
+            setState(() {});
+          }
         }
       }());
     }

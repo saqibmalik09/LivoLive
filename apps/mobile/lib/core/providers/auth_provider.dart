@@ -97,6 +97,7 @@ final userProfileProvider = StreamProvider<Map<String, dynamic>?>((ref) {
 });
 
 const _profileFetchTimeout = Duration(seconds: 2);
+const _firstProfileFetchTimeout = Duration(seconds: 10);
 
 Map<String, dynamic>? _cachedUserProfile(String sessionUserId) {
   final cachedMedia = HiveCacheService.loadProfileMedia(sessionUserId);
@@ -127,12 +128,16 @@ Stream<Map<String, dynamic>?> _userProfileUpdates(
   yield* realtimeWithFallback<Map<String, dynamic>?>(
     fetch: () async {
       try {
+        // With nothing cached (first login on a new install) the router waits
+        // on this row to leave the login screen, and that first request also
+        // pays for the connection setup. Two seconds was not enough for it.
+        final hasLocal = _cachedUserProfile(sessionUserId) != null;
         final row = await client
             .from('users')
             .select()
             .eq('id', sessionUserId)
             .maybeSingle()
-            .timeout(_profileFetchTimeout);
+            .timeout(hasLocal ? _profileFetchTimeout : _firstProfileFetchTimeout);
         if (row != null) {
           final profile = Map<String, dynamic>.from(row);
           await HiveCacheService.saveProfileMedia(
@@ -221,11 +226,24 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  /// The router only leaves the login screen once the profile row is loaded.
+  /// Holding the spinner until then stops a slow first load looking like a
+  /// login that silently failed.
+  Future<void> _waitForProfile() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      if (_ref.read(userProfileProvider).valueOrNull != null) return;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
   Future<bool> signInWithGoogle() async {
     state = const AsyncLoading();
     try {
       await AuthService.instance.signInWithGoogle();
       await _afterAuthSuccess();
+      await _waitForProfile();
+      if (!mounted) return true;
       state = const AsyncValue.data(null);
       return true;
     } catch (e, stack) {
