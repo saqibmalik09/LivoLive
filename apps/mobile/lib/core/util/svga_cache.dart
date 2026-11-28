@@ -242,6 +242,7 @@ class SvgaCache {
       data.length >= 3 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33;
 
   static Future<MovieEntity> _load(String url) async {
+    final sw = Stopwatch()..start();
     File? file;
     try {
       file = File('${(await _dir()).path}/${_keyFor(url)}.svga');
@@ -250,6 +251,7 @@ class SvgaCache {
           await file.readAsBytes(),
         ).timeout(_decodeTimeout);
         _remember(url, entity);
+        debugPrint('[gift_fx] svga disk ${sw.elapsedMilliseconds}ms $url');
         return entity;
       }
     } catch (e) {
@@ -261,8 +263,14 @@ class SvgaCache {
     }
 
     final bytes = await _download(url);
+    final downloadMs = sw.elapsedMilliseconds;
     final entity = await _decode(bytes).timeout(_decodeTimeout);
     _remember(url, entity);
+    debugPrint(
+      '[gift_fx] svga network ${(bytes.length / 1024).round()}KB '
+      'download=${downloadMs}ms decode=${sw.elapsedMilliseconds - downloadMs}ms '
+      '$url',
+    );
 
     // Persist after decoding, so a corrupt download is never cached.
     if (file != null) {

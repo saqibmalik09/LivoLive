@@ -13,7 +13,7 @@ type BulkRow = {
   id: string;
   fileName: string;
   name: string;
-  kind: "image" | "svga";
+  kind: "image" | "svga" | "video";
   previewSrc: string;
   remoteUrl?: string;
   status: "pending" | "uploading" | "ready" | "error";
@@ -63,13 +63,14 @@ export function ShopBulkUpload({
     if (!files.length) return;
     const nextRows: BulkRow[] = files.map((file) => {
       const isSvga = isSvgaRankingAsset(file.name, file.type);
+      const isVideo = file.type.startsWith("video/") || /\.(mp4|m4v|mov|webm)$/i.test(file.name);
       const previewSrc = URL.createObjectURL(file);
       blobUrlsRef.current.push(previewSrc);
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`,
         fileName: file.name,
         name: stemName(file.name),
-        kind: isSvga ? "svga" : "image",
+        kind: isVideo ? "video" : isSvga ? "svga" : "image",
         previewSrc,
         status: "pending",
       };
@@ -131,7 +132,7 @@ export function ShopBulkUpload({
       price_coins: priceCoins,
       duration_days: durationDays,
       image_url: r.kind === "image" ? r.remoteUrl : "",
-      svga_url: r.kind === "svga" ? r.remoteUrl : "",
+      svga_url: r.kind === "image" ? "" : r.remoteUrl,
       is_active: isActive,
       is_for_sale: isForSale,
       is_gift: isGift,
@@ -249,13 +250,13 @@ export function ShopBulkUpload({
             className="px-5 py-3 rounded-xl bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-2 hover:bg-emerald-500/30"
           >
             <Upload size={18} />
-            Add files (image / SVGA)
+            Add files (image / SVGA / MP4)
           </button>
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*,.svga,application/octet-stream"
+            accept="image/*,.svga,.mp4,video/mp4,application/octet-stream"
             className="hidden"
             onChange={(e) => void onPickFiles(e)}
           />
@@ -278,7 +279,8 @@ export function ShopBulkUpload({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-widest text-white/40">
-                    {row.kind === "svga" ? "SVGA" : "Image"} · {row.status}
+                    {row.kind === "svga" ? "SVGA" : row.kind === "video" ? "MP4" : "Image"} ·{" "}
+                    {row.status}
                   </p>
                   <input
                     value={row.name}
@@ -300,7 +302,16 @@ export function ShopBulkUpload({
                 </button>
               </div>
 
-              {row.kind === "svga" ? (
+              {row.kind === "video" ? (
+                <video
+                  src={row.previewSrc}
+                  autoPlay
+                  loop
+                  controls
+                  playsInline
+                  className="w-full max-h-40 object-contain rounded-xl bg-black"
+                />
+              ) : row.kind === "svga" ? (
                 <RankingAssetUrlPreview
                   previewSrc={row.previewSrc}
                   url={row.remoteUrl}

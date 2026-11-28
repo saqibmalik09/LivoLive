@@ -10996,7 +10996,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _fullScreenGiftOverlayEntry = entry;
     Overlay.of(context).insert(entry);
 
-    Future.delayed(const Duration(seconds: 15), () {
+    // Safety net only; the gift reports its own end. Long enough for a slow
+    // first download (up to 25 s) plus the animation itself.
+    Future.delayed(const Duration(seconds: 40), () {
       if (_fullScreenGiftOverlayEntry == entry) {
         _onFullScreenGiftFinished(entry);
       }

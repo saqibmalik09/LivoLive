@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -321,31 +322,53 @@ void prefetchGiftCatalogIcons(GiftCatalog catalog, {int limit = 16}) {
   }
 }
 
-/// Puts gift `.svga` files on disk ahead of the first send, so the first play
-/// of each gift is the animation and not its listing PNG. Disk only, bounded,
-/// once per URL per session; starts after the room-entry burst.
-void warmGiftCatalogAnimations(GiftCatalog catalog, {int limit = 24}) {
+/// Puts gift animations (SVGA and MP4) on disk ahead of the first send, so
+/// the first play of each gift is the animation and not its listing PNG.
+///
+/// A fresh install had nothing on disk and only warmed 24 files on room
+/// entry, so the first send of almost every gift downloaded live and lost
+/// the race. Now every gift is warmed on Wi-Fi (the first [mobileLimit] on
+/// mobile data), in sheet order, two at a time, once per URL per session.
+void warmGiftCatalogAnimations(
+  GiftCatalog catalog, {
+  int mobileLimit = 60,
+  int wifiLimit = 400,
+}) {
   if (catalog.isEmpty) return;
-  final urls = <String>[];
+  final svgas = <String>[];
   final videos = <String>[];
   for (final cat in catalog.categories) {
     for (final gift in catalog.giftsByCategory[cat.id] ?? const <ShopItem>[]) {
       final media = gift.svgaUrl?.trim() ?? '';
       if (media.isEmpty) continue;
       if (MediaUrlUtil.isSvgaUrl(media)) {
-        urls.add(media);
+        svgas.add(media);
       } else if (MediaUrlUtil.isVideoUrl(media)) {
         videos.add(media);
       }
-      if (urls.length + videos.length >= limit) break;
     }
-    if (urls.length + videos.length >= limit) break;
   }
-  if (urls.isEmpty && videos.isEmpty) return;
-  Timer(const Duration(seconds: 3), () {
-    if (urls.isNotEmpty) unawaited(SvgaCache.warmDisk(urls, limit: limit));
-    // Videos are several MB each, so only the first few are warmed.
-    if (videos.isNotEmpty) unawaited(GiftVideoCache.prefetch(videos, limit: 6));
+  if (svgas.isEmpty && videos.isEmpty) return;
+  Timer(const Duration(seconds: 3), () async {
+    var onWifi = false;
+    try {
+      final links = await Connectivity().checkConnectivity();
+      onWifi =
+          links.contains(ConnectivityResult.wifi) ||
+          links.contains(ConnectivityResult.ethernet);
+    } catch (_) {}
+    final limit = onWifi ? wifiLimit : mobileLimit;
+    debugPrint(
+      '[gift_fx] warm start svga=${svgas.length} mp4=${videos.length} '
+      'wifi=$onWifi limit=$limit',
+    );
+    final sw = Stopwatch()..start();
+    await Future.wait([
+      if (svgas.isNotEmpty) SvgaCache.warmDisk(svgas, limit: limit),
+      if (videos.isNotEmpty)
+        GiftVideoCache.prefetch(videos, limit: onWifi ? 80 : 12),
+    ]);
+    debugPrint('[gift_fx] warm done in ${sw.elapsedMilliseconds}ms');
   });
 }
 
@@ -373,6 +396,7 @@ final giftCatalogProvider = FutureProvider<GiftCatalog>((ref) async {
       try {
         final fresh = await _fetchGiftCatalog();
         prefetchGiftCatalogIcons(fresh);
+        warmGiftCatalogAnimations(fresh);
         if (_catalogFingerprint(fresh) != cachedFp) {
           ref.invalidateSelf();
         }

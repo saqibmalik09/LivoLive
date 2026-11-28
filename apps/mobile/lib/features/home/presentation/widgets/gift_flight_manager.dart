@@ -116,10 +116,13 @@ class GiftFlightManagerState extends State<GiftFlightManager>
 
   /// Longest a first-time gift waits in the centre for its SVGA before
   /// holding the icon instead.
-  static const Duration _heroSvgaWait = Duration(seconds: 5);
+  /// Long on purpose: giving up early flew the listing PNG away on every
+  /// first send of a gift whose file was still downloading.
+  static const Duration _heroSvgaWait = Duration(seconds: 15);
 
-  /// Minimum time an SVGA that arrived late stays on screen before flying.
-  static const int _heroLateSvgaShowMs = 1500;
+  /// Minimum time an animation that arrived late stays on screen before
+  /// flying.
+  static const int _heroLateSvgaShowMs = 2500;
 
   /// Hold for a first-send gift that a newer gift asked to release while its
   /// SVGA was still downloading: long enough to see the animation.
@@ -359,6 +362,9 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       iconUrl: request.imageUrl,
     );
     final ready = svga.isEmpty || _animationReady(svga);
+    if (svga.isNotEmpty) {
+      debugPrint('[gift_fx] centre start ready=$ready $svga');
+    }
     final holdMs = ready
         ? _resolveHoldMs(configuredMs, svga)
         : (configuredMs > 0 ? configuredMs : _heroHoldMs);
@@ -446,6 +452,11 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       if (resumed) return;
       resumed = true;
       if (!mounted) return;
+      debugPrint(
+        '[gift_fx] centre ${loaded ? 'loaded' : 'GAVE UP'} after '
+        '${DateTime.now().millisecondsSinceEpoch - group.first.hero!.startedAtMs}ms '
+        '$svgaUrl',
+      );
       final fullHoldMs = loaded
           ? _resolveHoldMs(configuredMs, svgaUrl)
           : (configuredMs > 0 ? configuredMs : GiftShowDuration.stillImageMs);

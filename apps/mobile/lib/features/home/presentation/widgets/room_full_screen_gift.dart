@@ -38,7 +38,7 @@ class RoomFullScreenGift extends StatefulWidget {
   /// A slow first download keeps the icon up and waits this long in total
   /// for the SVGA, then plays it. Closing at the decode deadline cut off
   /// every first send of a gift that was not cached yet.
-  static const Duration slowLoadDeadline = Duration(milliseconds: 8000);
+  static const Duration slowLoadDeadline = Duration(seconds: 25);
 
   @override
   State<RoomFullScreenGift> createState() => _RoomFullScreenGiftState();
@@ -71,7 +71,14 @@ class _RoomFullScreenGiftState extends State<RoomFullScreenGift> {
     super.dispose();
   }
 
+  final Stopwatch _loadWatch = Stopwatch()..start();
+
   void _onSvgaLoaded() {
+    debugPrint(
+      '[gift_fx] fullscreen loaded after ${_loadWatch.elapsedMilliseconds}ms '
+      '${_reportedFinished ? '(too late, already closed) ' : ''}'
+      '${widget.svgaUrl}',
+    );
     if (_reportedFinished) return;
     _svgaStarted = true;
     _deadlineTimer?.cancel();
@@ -85,6 +92,10 @@ class _RoomFullScreenGiftState extends State<RoomFullScreenGift> {
       _finish();
       return;
     }
+    debugPrint(
+      '[gift_fx] fullscreen FAILED after ${_loadWatch.elapsedMilliseconds}ms '
+      '${widget.svgaUrl}',
+    );
     _startFallback();
   }
 

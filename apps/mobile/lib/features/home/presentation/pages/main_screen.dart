@@ -32,6 +32,7 @@ import 'package:sk_live/features/task/presentation/widgets/daily_signin_popup.da
 import 'package:sk_live/features/task/services/daily_signin_service.dart';
 import 'package:sk_live/features/task/data/task_center_provider.dart';
 import 'package:sk_live/core/providers/gift_provider.dart';
+import 'package:sk_live/core/providers/shop_provider.dart' show warmGiftCatalog;
 import 'package:sk_live/features/home/services/ranking_room_promo_service.dart';
 import 'package:sk_live/features/home/services/room_lock_service.dart';
 import 'package:sk_live/features/home/presentation/widgets/ranking_room_promo_popup.dart';
@@ -98,6 +99,9 @@ class _MainScreenState extends ConsumerState<MainScreen>
     if (_dailySignInPrompted || !mounted) return;
     _dailySignInPrompted = true;
     await Future<void>.delayed(_launchPopupSettle);
+    // Gift animations download from here, not on room entry: a fresh install
+    // otherwise sent its first gift of every kind before any file was on disk.
+    if (mounted) warmGiftCatalog(ref);
     if (!mounted || !_homeIsTopRoute) return;
     final dailyShown = await _maybeShowDailySignIn();
     if (!mounted || dailyShown) return;
