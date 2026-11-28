@@ -2486,6 +2486,11 @@ io.on("connection", (socket) => {
         quantity: Math.min(Math.max(Number(payload.quantity) || 1, 1), 9999),
         is_full_screen: !!(payload.is_full_screen ?? payload.isFullScreen),
         svga_url: payload.svga_url || payload.svgaUrl || "",
+        show_duration_ms:
+          payload.show_duration_ms != null &&
+          Number.isFinite(Number(payload.show_duration_ms))
+          ? Math.max(0, Math.min(60000, Number(payload.show_duration_ms)))
+          : undefined,
         lucky_engine: payload.lucky_engine || undefined,
         settled_on_gateway: payload.settled_on_gateway === true,
         sent_at: new Date().toISOString(),
@@ -2847,6 +2852,7 @@ io.on("connection", (socket) => {
               icon_url: gift.icon_url,
               svga_url: gift.svga_url,
               is_full_screen: gift.is_full_screen === true,
+              show_duration_ms: built.notifyPayload.show_duration_ms,
               category_name: gift.category_name,
             },
           });

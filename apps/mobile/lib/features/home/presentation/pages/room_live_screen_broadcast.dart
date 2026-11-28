@@ -100,29 +100,6 @@ mixin _RoomLiveBroadcastMixin on ConsumerState<RoomLiveScreen> {
     }
   }
 
-  void _dispatchZegoRoomEvent(String event, Map<String, dynamic> payload) {
-    switch (event) {
-      case RoomLiveBroadcast.chat:
-        _handleRoomChatBroadcast(payload);
-      case RoomLiveBroadcast.gift:
-        _handleRoomGiftBroadcast(payload);
-      case RoomLiveBroadcast.seat:
-        _applySeatBroadcast(payload);
-      case RoomLiveBroadcast.kick:
-        _handleRoomKickBroadcast(payload);
-      case RoomLiveBroadcast.meta:
-        _handleRoomMetaBroadcast(payload);
-      case RoomLiveBroadcast.micEmoji:
-        _handleRoomMicEmojiBroadcast(payload);
-      case RoomLiveBroadcast.entrance:
-        _handleRoomEntranceBroadcast(payload);
-      case RoomLiveBroadcast.luckyWin:
-        _handleRoomLuckyWinBroadcast(payload);
-      default:
-        debugPrint('[RoomZego] unhandled event=$event');
-    }
-  }
-
   void _scheduleSeatReconcile() {
     _rb._seatReconcileTimer?.cancel();
     _rb._seatReconcileTimer = Timer(

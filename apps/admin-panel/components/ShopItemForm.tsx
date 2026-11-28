@@ -93,6 +93,9 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
       is_for_sale: formData.get("is_for_sale") === "on",
       is_gift: formData.get("is_gift") === "on",
       is_full_screen: formData.get("is_full_screen") === "on",
+      show_duration_ms: Math.round(
+        Math.max(0, Math.min(60, Number(formData.get("show_seconds")) || 0)) * 1000,
+      ),
       required_vip_level: parseInt((formData.get("required_vip_level") as string) || "0"),
       required_wealth_value: parseInt((formData.get("required_wealth_value") as string) || "0"),
       source_type: formData.get("source_type"),
@@ -242,6 +245,25 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
                   SVGA plays in the preview above — switch Image / SVGA tabs to compare.
                 </p>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold uppercase text-white/30 tracking-widest px-1 flex items-center gap-2">
+                <Clock size={10} /> Show for (seconds)
+              </label>
+              <input
+                type="number"
+                name="show_seconds"
+                min={0}
+                max={60}
+                step={0.5}
+                defaultValue={(item?.show_duration_ms ?? 5000) / 1000}
+                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500/50 transition-all font-mono"
+              />
+              <p className="text-[10px] text-white/40">
+                0 = the animation&apos;s own length (3 s for still images). Every viewer holds the
+                gift on screen this long.
+              </p>
             </div>
           </div>
         </div>

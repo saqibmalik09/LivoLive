@@ -49,6 +49,9 @@ class SvgaCache {
   }
 
   static bool isInMemory(String url) => _memory.containsKey(url);
+
+  /// The decoded animation if it is in memory, without touching LRU order.
+  static MovieEntity? peek(String url) => _memory[url];
   static Directory? _cacheDir;
 
   /// FNV-1a over the url. Deterministic across runs, so disk entries survive a

@@ -4,7 +4,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:sk_live/core/util/app_image_cache.dart';
+import 'package:sk_live/core/util/gift_show_duration.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 
 class GiftFlightRequest {
@@ -109,6 +111,10 @@ class GiftFlightManagerState extends State<GiftFlightManager>
   static const int _heroHoldMs = 2600;
   static const int _heroFlyMs = 650;
   static const double _heroScale = 1.9;
+
+  /// Longest a first-time gift waits in the centre for its SVGA before
+  /// holding the icon instead.
+  static const Duration _heroSvgaWait = Duration(seconds: 8);
 
   /// A gift from the same sender inside this gap is a combo: it skips the
   /// hold so fast tapping keeps flying fast.
@@ -312,11 +318,18 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     flight.releaseTimer?.cancel();
     flight.releaseTimer = null;
     if (flight.controller.value >= hero.holdEnd) return;
+    hero.waitingForSvga = false;
     flight.controller.forward(from: hero.holdEnd);
   }
 
   /// One icon per receiver, all starting together in the centre; only the
   /// first is drawn until they split up for the flight.
+  ///
+  /// The hold is the gift's "Show for" time from the dashboard. A gift whose
+  /// SVGA is not decoded yet (the first send of it on this phone) pops its
+  /// icon and pauses there until the SVGA is ready, and only then starts the
+  /// hold — a fixed hold used to end before the download did, so the first
+  /// few sends of every gift only ever showed the listing image.
   void _startHero(GiftFlightRequest request, String chainId) {
     if (_activeSingles.length >= _maxActiveFlights) return;
     _releaseHeldHeroes();
@@ -325,13 +338,23 @@ class GiftFlightManagerState extends State<GiftFlightManager>
         ? box.size
         : MediaQuery.sizeOf(context);
     final center = Offset(size.width / 2, size.height * 0.42);
-    const totalMs = _heroPopMs + _heroHoldMs + _heroFlyMs;
+    final svga = request.svgaUrl.trim();
+    final configuredMs = GiftShowDuration.lookup(
+      svgaUrl: svga,
+      iconUrl: request.imageUrl,
+    );
+    final ready = svga.isEmpty || SvgaCache.isInMemory(svga);
+    final holdMs = ready
+        ? _resolveHoldMs(configuredMs, svga)
+        : (configuredMs > 0 ? configuredMs : _heroHoldMs);
+    final totalMs = _heroPopMs + holdMs + _heroFlyMs;
     final startedAt = DateTime.now().millisecondsSinceEpoch;
     final qty = request.quantity.clamp(1, 9999);
+    final group = <_ActiveSingle>[];
     var index = 0;
     for (final targetId in request.targetIds) {
       if (_activeSingles.length >= _maxActiveFlights) break;
-      _startSingle(
+      final flight = _startSingle(
         _SinglePending(
           start: center,
           end: request.resolveOffset(targetId),
@@ -342,16 +365,90 @@ class GiftFlightManagerState extends State<GiftFlightManager>
         hero: _HeroTiming(
           comboKey: request.comboKey,
           popEnd: _heroPopMs / totalMs,
-          holdEnd: (_heroPopMs + _heroHoldMs) / totalMs,
+          holdEnd: (_heroPopMs + holdMs) / totalMs,
           startedAtMs: startedAt,
           drawWhileHeld: index == 0,
           quantity: qty,
-          svgaUrl: request.svgaUrl.trim(),
+          svgaUrl: svga,
+          waitingForSvga: !ready,
         ),
       );
+      group.add(flight);
       index++;
     }
+    if (!ready && group.isNotEmpty) _holdUntilSvgaReady(group, svga, configuredMs);
     _scheduleRebuild();
+  }
+
+  /// [configuredMs] of 0 means the SVGA's own length; stills get 3 s.
+  int _resolveHoldMs(int configuredMs, String svgaUrl) {
+    if (configuredMs > 0) return configuredMs;
+    if (svgaUrl.isEmpty) return GiftShowDuration.stillImageMs;
+    final params = SvgaCache.peek(svgaUrl)?.params;
+    final fps = params?.fps ?? 0;
+    final frames = params?.frames ?? 0;
+    if (fps <= 0 || frames <= 0) return GiftShowDuration.stillImageMs;
+    return (frames * 1000 / fps).round().clamp(1000, GiftShowDuration.maxMs);
+  }
+
+  void _holdUntilSvgaReady(
+    List<_ActiveSingle> group,
+    String svgaUrl,
+    int configuredMs,
+  ) {
+    for (final flight in group) {
+      final hero = flight.hero!;
+      void pauseAtPop() {
+        if (!hero.waitingForSvga) {
+          flight.controller.removeListener(pauseAtPop);
+          return;
+        }
+        if (flight.controller.value >= hero.popEnd) {
+          flight.controller.removeListener(pauseAtPop);
+          flight.controller.stop();
+        }
+      }
+
+      flight.controller.addListener(pauseAtPop);
+    }
+
+    var resumed = false;
+    void resume({required bool loaded}) {
+      if (resumed) return;
+      resumed = true;
+      if (!mounted) return;
+      final holdMs = loaded
+          ? _resolveHoldMs(configuredMs, svgaUrl)
+          : (configuredMs > 0 ? configuredMs : GiftShowDuration.stillImageMs);
+      final totalMs = _heroPopMs + holdMs + _heroFlyMs;
+      for (final flight in group) {
+        final hero = flight.hero!;
+        hero.waitingForSvga = false;
+        if (!loaded) hero.svgaUrl = '';
+        if (!_activeSingles.contains(flight)) continue;
+        // Released early by a newer gift or a combo tap: already flying.
+        if (flight.controller.isAnimating &&
+            flight.controller.value >= hero.holdEnd) {
+          continue;
+        }
+        final pastPop = flight.controller.value >= hero.popEnd;
+        hero.popEnd = _heroPopMs / totalMs;
+        hero.holdEnd = (_heroPopMs + holdMs) / totalMs;
+        flight.controller.duration = Duration(milliseconds: totalMs);
+        if (pastPop) {
+          flight.controller.forward(from: hero.popEnd);
+        } else if (!flight.controller.isAnimating) {
+          flight.controller.forward();
+        }
+      }
+    }
+
+    SvgaCache.load(svgaUrl)
+        .timeout(_heroSvgaWait)
+        .then(
+          (_) => resume(loaded: true),
+          onError: (Object _) => resume(loaded: false),
+        );
   }
 
   int _waveFlightMs(int totalQuantity) {
@@ -405,7 +502,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     if (batch.items.isNotEmpty) _scheduleRebuild();
   }
 
-  void _startSingle(
+  _ActiveSingle _startSingle(
     _SinglePending pending,
     String chainId, {
     _HeroTiming? hero,
@@ -438,6 +535,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       _scheduleRebuild();
     });
     controller.forward();
+    return flight;
   }
 
   void _scheduleRebuild() {
@@ -709,18 +807,23 @@ class _ActiveSingle {
 }
 
 /// Phase boundaries of a centre-hold flight, as fractions of its controller.
+/// Re-timed once a first-time SVGA has loaded and its real hold is known.
 class _HeroTiming {
   final String comboKey;
-  final double popEnd;
-  final double holdEnd;
+  double popEnd;
+  double holdEnd;
   final int startedAtMs;
   final bool drawWhileHeld;
   final int quantity;
 
   /// The gift's animation, played in the centre instead of the still icon.
-  final String svgaUrl;
+  /// Cleared when it fails to load, so the icon holds instead.
+  String svgaUrl;
 
-  const _HeroTiming({
+  /// Paused after the pop until the SVGA has decoded.
+  bool waitingForSvga;
+
+  _HeroTiming({
     required this.comboKey,
     required this.popEnd,
     required this.holdEnd,
@@ -728,6 +831,7 @@ class _HeroTiming {
     required this.drawWhileHeld,
     required this.quantity,
     this.svgaUrl = '',
+    this.waitingForSvga = false,
   });
 }
 

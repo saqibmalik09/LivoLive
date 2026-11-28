@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:sk_live/core/widgets/dynamic_chat_bubble.dart';
@@ -18,7 +17,6 @@ import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/voice_backend_provider.dart';
 import 'package:sk_live/core/services/orbit_voice_session_service.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
-import 'package:sk_live/core/util/string_truncate.dart';
 import 'package:sk_live/core/services/room_exit_coordinator.dart';
 import 'package:sk_live/core/services/room_switch_coordinator.dart';
 import 'package:sk_live/core/router/app_router.dart';
@@ -59,6 +57,7 @@ import 'package:sk_live/features/home/presentation/widgets/room_games_sheet.dart
 import 'package:sk_live/core/services/room_voice_session_service.dart';
 import 'package:sk_live/core/router/room_route_observer.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/util/gift_show_duration.dart';
 import 'package:sk_live/features/home/presentation/pages/room_info_screen.dart';
 import 'package:sk_live/core/widgets/user_profile_mini_sheet.dart';
 import 'package:sk_live/core/providers/chat_provider.dart';
@@ -101,14 +100,12 @@ import 'package:sk_live/features/home/presentation/widgets/room_chat_tabs.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_side_float_rail.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_contribution_sheet.dart';
 import 'package:sk_live/features/home/presentation/pages/gift_center_screen.dart';
-import 'package:sk_live/core/providers/room_contribution_provider.dart';
 import 'package:sk_live/core/providers/shop_provider.dart';
 import 'package:sk_live/features/home/presentation/widgets/team_pk/team_pk_overlay.dart';
 import 'package:sk_live/features/home/presentation/widgets/team_pk/team_pk_setting_sheet.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_mic_emoji_sheet.dart';
 import 'package:sk_live/features/home/presentation/widgets/room_mic_emoji_overlay.dart';
 import 'package:sk_live/core/util/app_constants.dart';
-import 'package:sk_live/core/util/debug_probe.dart'; // agent log
 import 'package:sk_live/core/models/big_gift_patti_announcement.dart';
 import 'package:sk_live/core/services/big_gift_patti_broadcast_controller.dart';
 import 'package:sk_live/core/util/big_gift_patti_util.dart';
@@ -297,7 +294,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Timer? _reconcilePollTimer;
   Timer? _presenceHeartbeatTimer;
   Timer? _presenceSnapshotTimer;
-  Timer? _gatewaySnapshotDebounceTimer;
   bool _presenceSnapshotBootstrap = false;
   static const Duration _reconcilePollInterval = Duration(seconds: 12);
   static const Duration _seatReconcileDebounce = Duration(seconds: 4);
@@ -392,8 +388,23 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   // Last gateway snapshot applied, so the duplicates a join produces (cached
   // seats, full snapshot, and the reply to our own snapshot request) do not
   // each rebuild the whole screen.
-  String? _lastSnapshotSignature;
+  int? _lastSnapshotSignature;
   DateTime? _lastSnapshotAppliedAt;
+
+  /// Content hash of a gateway snapshot, in the same key order the JSON
+  /// arrived in. Replaces jsonEncode, which built a string of the whole seat
+  /// and audience list on the UI isolate for every snapshot of a busy room.
+  static int _snapshotSignature(Object? value) {
+    if (value is Map) {
+      return Object.hashAll(
+        value.entries.map(
+          (e) => Object.hash(e.key, _snapshotSignature(e.value)),
+        ),
+      );
+    }
+    if (value is List) return Object.hashAll(value.map(_snapshotSignature));
+    return value.hashCode;
+  }
   // Time from this screen being created to the first seat list from the
   // gateway. Logged once per room open so the one-second target can be checked
   // on a real device instead of guessed.
@@ -657,7 +668,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       ListQueue<({String svgaUrl, String iconUrl})>();
   static const int _maxFullScreenGiftQueued = 3;
   RepeatGiftSession? _repeatGiftSession;
-  bool _isRepeatSending = false;
   bool _repeatGiftDraining = false;
   /// Optimistic coins for the repeat-gift button. Deducted on each tap so a
   /// stale profile stream cannot keep accepting taps past the real balance.
@@ -700,27 +710,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   static const Duration _repeatGiftMinInterval = Duration(milliseconds: 40);
   final Set<String> _giftTargetUserIds = {};
   bool _giftTargetAllSelected = false;
-
-  int _roomCurrentLevel() {
-    for (final source in [_roomData, widget.room]) {
-      if (source == null) continue;
-      final stats = source['room_stats'];
-      if (stats is Map) {
-        return (stats['current_level'] as num?)?.toInt() ?? 1;
-      }
-      if (stats is List && stats.isNotEmpty) {
-        final first = stats.first;
-        if (first is Map) {
-          return (first['current_level'] as num?)?.toInt() ?? 1;
-        }
-      }
-      final direct = source['current_level'];
-      if (direct != null) {
-        return (direct as num).toInt();
-      }
-    }
-    return 1;
-  }
 
   @override
   void initState() {
@@ -1658,13 +1647,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
     switch (event) {
       case RoomLiveBroadcast.eventSeat:
-        // #region agent log
-        DebugProbe.log('D', 'room_live_screen:_dispatchGatewayRoomEvent', 'seat event received', {
-          'action': payload['action']?.toString(),
-          'seat': payload['seat_index'],
-          'actor8': (payload['actor_user_id']?.toString() ?? '-').padRight(8).substring(0, 8),
-        });
-        // #endregion
         _applySeatBroadcast(payload);
       case RoomLiveBroadcast.eventMeta:
         _handleRoomMetaBroadcast(payload);
@@ -1680,7 +1662,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         debugPrint('[Entrance] gateway event room_entrance');
         _handleRoomEntranceBroadcast(payload);
       case RoomLiveBroadcast.kick:
-      case RoomLiveBroadcast.eventKick:
         _handleRoomKickBroadcast(payload);
       case RoomLiveBroadcast.luckyWin:
         _handleRoomLuckyWinBroadcast(payload);
@@ -1799,7 +1780,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     // A join delivers the same seat list several times within a second. The
     // window is short so a later identical snapshot still gets to expire seat
     // holds and re-run the heal checks below.
-    final signature = jsonEncode(snap);
+    final signature = _snapshotSignature(snap);
     final now = DateTime.now();
     final lastAt = _lastSnapshotAppliedAt;
     if (signature == _lastSnapshotSignature &&
@@ -2206,22 +2187,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
   }
 
-  void _scheduleDebouncedGatewaySnapshot({
-    Duration debounce = const Duration(milliseconds: 800),
-  }) {
-    if (RoomSeatSyncService.shouldSkipFetch(_lastSeatBroadcastAt)) return;
-    _gatewaySnapshotDebounceTimer?.cancel();
-    _gatewaySnapshotDebounceTimer = Timer(debounce, () {
-      if (!mounted) return;
-      if (RoomSeatSyncService.shouldSkipFetch(_lastSeatBroadcastAt)) return;
-      unawaited(
-        RoomRealtimeSocket.instance.requestSnapshot(
-          widget.room['id'].toString(),
-        ),
-      );
-    });
-  }
-
   void _scheduleReconnectBanner() {
     if (_isLeavingRoom) return;
     _reconnectBannerTimer?.cancel();
@@ -2286,29 +2251,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     }
     _notifyChatListChanged();
     _scrollToBottom();
-  }
-
-  Future<void> _fetchRecentGlobalWins() async {
-    try {
-      final supabase = Supabase.instance.client;
-      final response = await supabase
-          .from('global_win_announcements')
-          .select()
-          .order('created_at', ascending: false)
-          .limit(40);
-
-      if (!mounted) return;
-      _globalWinMessages
-        ..clear()
-        ..addAll(
-          List<Map<String, dynamic>>.from(
-            response.reversed,
-          ).map((row) => {...row, 'type': 'global_win'}),
-        );
-      _notifyChatListChanged();
-    } catch (e) {
-      debugPrint('Failed to fetch global wins: $e');
-    }
   }
 
   bool _isWinAnnouncementMessage(Map<String, dynamic> msg) {
@@ -3678,6 +3620,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<void> _initOrbitVoiceUnlocked({required bool openMic}) async {
     final roomId = widget.room['id']?.toString() ?? '';
     if (roomId.isEmpty) return;
+    // Android 12+: without BLUETOOTH_CONNECT, AudioSwitch never sees earpods
+    // and voice stays on the loudspeaker until the user picks Output Device.
+    await _ensureBluetoothConnectForAudio();
     final onSeat = _mySeatIndex != null;
     final wantPublish = onSeat || openMic;
     OrbitVoiceSessionService.setMicIntent(openMic);
@@ -4401,35 +4346,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     return false;
   }
 
-  Future<bool> _ensureVoiceRoomReady({
-    Duration timeout = const Duration(seconds: 8),
-  }) async {
-    final sw = Stopwatch()..start();
-    final deadline = DateTime.now().add(timeout);
-    while (mounted && DateTime.now().isBefore(deadline)) {
-      final gatewayOk = await _ensureGatewayReady(
-        timeout: const Duration(milliseconds: 200),
-      );
-      if (_zegoLoginReady && gatewayOk) {
-        devLog(
-          '[SEAT] voiceReady OK zego=$_zegoLoginReady gateway=$gatewayOk '
-          'ms=${sw.elapsedMilliseconds}',
-        );
-        return true;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-    }
-    final gatewayOk = await _ensureGatewayReady(
-      timeout: const Duration(milliseconds: 200),
-    );
-    final ok = mounted && _zegoLoginReady && gatewayOk;
-    devLog(
-      '[SEAT] voiceReady end ok=$ok zego=$_zegoLoginReady gateway=$gatewayOk '
-      'ms=${sw.elapsedMilliseconds}',
-    );
-    return ok;
-  }
-
   Future<void> _fetchRoomDetails() async {
     try {
       final response = await Supabase.instance.client
@@ -4786,16 +4702,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   Future<void> _startSpeakingUnguarded(bool shouldOpenMic) async {
     if (ref.read(userProfileProvider).value == null) return;
-    // #region agent log
-    DebugProbe.log('A', 'room_live_screen:_startSpeaking', 'startSpeaking entry', {
-      'openMic': shouldOpenMic,
-      'liveForRoom':
-          OrbitVoiceSessionService.isLiveForRoom(widget.room['id'].toString()),
-      'canPublishNow': OrbitVoiceSessionService.canPublishNow,
-      'orbitCanPublish': _orbitCanPublish,
-      'muted': _isMuted,
-    });
-    // #endregion
     devLog(
       '[SEAT] startSpeaking openMic=$shouldOpenMic '
       'zegoReady=$_zegoLoginReady mySeat=$_mySeatIndex '
@@ -6056,8 +5962,9 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _cancelAllEntranceRejoinTimers();
     _presenceSnapshotTimer?.cancel();
     _presenceHeartbeatTimer?.cancel();
-    _gatewaySnapshotDebounceTimer?.cancel();
     _snapshotHoldRecheckTimer?.cancel();
+    _seatReconcileTimer?.cancel();
+    _reconcilePollTimer?.cancel();
     _repeatGiftHideTimer?.cancel();
     _repeatComboTick.dispose();
     _bonusPattiHideTimer?.cancel();
@@ -6137,6 +6044,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       _chatScrollController.dispose();
       _messageController.removeListener(_onRoomChatTextChanged);
       _messageController.dispose();
+      _chatFocusNode.dispose();
       super.dispose();
       return;
     }
@@ -6199,6 +6107,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _chatScrollController.dispose();
     _messageController.removeListener(_onRoomChatTextChanged);
     _messageController.dispose();
+    _chatFocusNode.dispose();
     super.dispose();
   }
 
@@ -6677,17 +6586,22 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               enabled: gameOverlayOpen == 0,
               child: Stack(
               children: [
+                // Each section repaints on its own: speaking waves on the seats,
+                // an animated background and new chat lines no longer repaint
+                // one another every frame.
                 Positioned.fill(
-                  child: _hasCustomBackground
-                      ? RoomBackgroundMedia(
-                          url: _roomData!['background_url'].toString(),
-                          fit: BoxFit.cover,
-                          darkenAlpha: 0,
-                        )
-                      : const RoomDefaultBackground(
-                          fit: BoxFit.cover,
-                          darkenAlpha: 0,
-                        ),
+                  child: RepaintBoundary(
+                    child: _hasCustomBackground
+                        ? RoomBackgroundMedia(
+                            url: _roomData!['background_url'].toString(),
+                            fit: BoxFit.cover,
+                            darkenAlpha: 0,
+                          )
+                        : const RoomDefaultBackground(
+                            fit: BoxFit.cover,
+                            darkenAlpha: 0,
+                          ),
+                  ),
                 ),
 
                 if (_showReconnectBanner)
@@ -6701,7 +6615,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                 SafeArea(
                   child: Column(
                     children: [
-                      _buildHeader(),
+                      RepaintBoundary(child: _buildHeader()),
                       _buildHeaderChipsRow(),
                       if (!_showExitSidebar)
                         RoomYoutubePlayerHost(controller: _youtubeSync),
@@ -6736,19 +6650,21 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                                   );
                                 },
                               ),
-                              _buildSeatsGrid(),
-                              ListenableBuilder(
-                                listenable: _chatListVersion,
-                                builder: (context, _) {
-                                  return Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _buildChatTabs(),
-                                      _buildRoomAnnouncementBar(),
-                                      _buildChatArea(),
-                                    ],
-                                  );
-                                },
+                              RepaintBoundary(child: _buildSeatsGrid()),
+                              RepaintBoundary(
+                                child: ListenableBuilder(
+                                  listenable: _chatListVersion,
+                                  builder: (context, _) {
+                                    return Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _buildChatTabs(),
+                                        _buildRoomAnnouncementBar(),
+                                        _buildChatArea(),
+                                      ],
+                                    );
+                                  },
+                                ),
                               ),
                             ],
                           ),
@@ -7858,13 +7774,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
   }
 
-  void _invalidateRoomContributions() {
-    // Intentionally empty on the gift hot path. Refetching contribution
-    // rankings on every gift was 2 RPCs + users.inFilter per send and made
-    // busy rooms feel like every tap waited on loading. Rankings refresh when
-    // the contribution sheet opens.
-  }
-
   Widget _buildOnlineAvatar(String? url, {double size = 25}) {
     return Container(
       width: size,
@@ -7925,113 +7834,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
 
   void _showOnlineMembersSheet() => _showRoomMembersSheet();
 
-  Widget _buildRoomMemberSectionHeader(String title, int count) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Colors.black12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '$count',
-              style: const TextStyle(color: Colors.black54, fontSize: 10),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRoomMemberAvatar(String userId, String? avatarUrl) {
-    return UserFramedAvatar(userId: userId, avatarUrl: avatarUrl, radius: 18);
-  }
-
-  Widget _buildRoomMemberBadgesRow(String userId) {
-    return UserMemberBadgesRow(userId: userId);
-  }
-
-  Widget _buildRoomMemberTile({
-    required BuildContext sheetContext,
-    required Map<String, dynamic> user,
-    required String subtitle,
-    IconData? badgeIcon,
-    Color? badgeColor,
-    int? seatIndex,
-  }) {
-    final userId = user['id']?.toString() ?? '';
-    final username = user['username'] ?? 'User';
-    final avatarUrl = user['avatar_url'] as String?;
-
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: _buildRoomMemberAvatar(userId, avatarUrl),
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            username,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-            ),
-          ),
-          _buildRoomMemberBadgesRow(userId),
-        ],
-      ),
-      subtitle: Row(
-        children: [
-          if (badgeIcon != null) ...[
-            Icon(badgeIcon, size: 12, color: badgeColor ?? Colors.black54),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            subtitle,
-            style: TextStyle(
-              color: badgeColor == Colors.white54
-                  ? Colors.black54
-                  : (badgeColor ?? Colors.black54),
-              fontSize: 11,
-            ),
-          ),
-        ],
-      ),
-      trailing: userId.isEmpty
-          ? null
-          : _buildMemberQuickActions(
-              sheetContext: sheetContext,
-              userId: userId,
-              username: username,
-              avatarUrl: avatarUrl,
-              seatIndex: seatIndex,
-            ),
-      onTap: userId.isEmpty
-          ? null
-          : () {
-              Navigator.pop(sheetContext);
-              _showMemberActionsSheet(
-                userId: userId,
-                username: username,
-                avatarUrl: avatarUrl,
-                seatIndex: seatIndex,
-              );
-            },
-    );
-  }
-
   void _showRoomMembersSheet() {
     RoomMembersSheet.show(
       context,
@@ -8054,10 +7856,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         );
       },
     );
-  }
-
-  int _seatCrossAxisCount(int micCount) {
-    return _resolveRoomMicLayout(micCount: micCount).maxColumns;
   }
 
   double _seatScaleFor(_RoomMicLayout layout, int index) {
@@ -8838,68 +8636,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
   }
 
-  Widget _buildMemberQuickActions({
-    required BuildContext sheetContext,
-    required String userId,
-    required String username,
-    String? avatarUrl,
-    int? seatIndex,
-  }) {
-    final myId = Supabase.instance.client.auth.currentUser?.id;
-    final isSelf = myId != null && userId == myId;
-
-    final canInviteSeat =
-        _canManageRoom &&
-        !isSelf &&
-        !_isUserOnSeat(userId) &&
-        _findFirstAvailableSeatIndex() != null;
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (canInviteSeat)
-          IconButton(
-            icon: const Icon(
-              Icons.event_seat,
-              size: 20,
-              color: Colors.greenAccent,
-            ),
-            tooltip: context.l10n.room_invite,
-            onPressed: () {
-              Navigator.pop(sheetContext);
-              _inviteUserToSeat(
-                userId,
-                seatIndex: seatIndex,
-                username: username,
-              );
-            },
-          ),
-        IconButton(
-          icon: Icon(
-            Iconsax.message,
-            size: 20,
-            color: isSelf ? Colors.black26 : AppColors.primary,
-          ),
-          tooltip: context.l10n.room_chat,
-          onPressed: isSelf
-              ? null
-              : () {
-                  Navigator.pop(sheetContext);
-                  _openPrivateChat(userId, username, avatarUrl: avatarUrl);
-                },
-        ),
-        IconButton(
-          icon: Icon(Iconsax.user, size: 20, color: Colors.black54),
-          tooltip: context.l10n.room_viewProfile,
-          onPressed: () {
-            Navigator.pop(sheetContext);
-            _showUserMiniProfile(userId, username: username);
-          },
-        ),
-      ],
-    );
-  }
-
   Widget _buildSeatOption({
     required IconData icon,
     required String title,
@@ -8964,23 +8700,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     // With an open voice token this is the whole permission step: the mic may
     // publish now, while the seat claim is still on its way.
     OrbitVoiceSessionService.markSitIntent(roomId: roomId);
-    // #region agent log
-    final dbgPrepareSw = Stopwatch()..start();
-    // #endregion
     unawaited(
-      RoomRealtimeSocket.instance
-          .seatPrepare({'roomId': roomId, 'seatIndex': index})
-          .then((res) {
-            // #region agent log
-            DebugProbe.log('G', 'room_live_screen:_prepareSeatVoice', 'seat:prepare ack', {
-              'ms': dbgPrepareSw.elapsedMilliseconds,
-              'ok': res?['ok'],
-              'perm': res?['perm'],
-              'error': res?['error'],
-              'canPublishNow': OrbitVoiceSessionService.canPublishNow,
-            });
-            // #endregion
-          }),
+      RoomRealtimeSocket.instance.seatPrepare({
+        'roomId': roomId,
+        'seatIndex': index,
+      }),
     );
     // Right after entering, voice may still be connecting; these wait for it
     // rather than doing nothing and leaving the whole mic start for later.
@@ -8999,14 +8723,20 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       if (!await Permission.microphone.isGranted) {
         await Permission.microphone.request();
       }
-      // Android 12+ needs BLUETOOTH_CONNECT at runtime before AudioSwitch may
-      // see or activate a Bluetooth headset. Without it the earbuds never
-      // appear as an output and voice stays on the loudspeaker.
-      if (Platform.isAndroid && !await Permission.bluetoothConnect.isGranted) {
-        await Permission.bluetoothConnect.request();
-      }
+      await _ensureBluetoothConnectForAudio();
     } catch (e) {
       debugPrint('[ROOM] mic permission at entry: $e');
+    }
+  }
+
+  /// Android 12+ needs this before AudioSwitch can list or select earpods.
+  Future<void> _ensureBluetoothConnectForAudio() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (await Permission.bluetoothConnect.isGranted) return;
+      await Permission.bluetoothConnect.request();
+    } catch (e) {
+      debugPrint('[ROOM] bluetooth connect permission: $e');
     }
   }
 
@@ -9098,15 +8828,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
       '[SEAT] sitDown confirmed openMic=$wantOpenMic '
       'ms=${sitSw.elapsedMilliseconds}',
     );
-    // #region agent log
-    DebugProbe.log('A', 'room_live_screen:_sitDown', 'sit confirmed', {
-      'openMic': wantOpenMic,
-      'seat': index,
-      'tapToConfirmMs': sitSw.elapsedMilliseconds,
-      'lkConnected': OrbitVoiceSessionService.isConnected,
-      'canPublishNow': OrbitVoiceSessionService.canPublishNow,
-    });
-    // #endregion
 
     final supabase = Supabase.instance.client;
     final roomId = widget.room['id'];
@@ -9203,12 +8924,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         '[SEAT] sitDown CLAIM OK seat=$index gen=$_seatSessionGeneration '
         'ms=${sitSw.elapsedMilliseconds}',
       );
-      // #region agent log
-      DebugProbe.log('A', 'room_live_screen:_sitDown', 'claim ack', {
-        'seat': index,
-        'tapToAckMs': sitSw.elapsedMilliseconds,
-      });
-      // #endregion
 
       if (!AppConstants.useRealtimeGateway) {
         if (previousSeatIndex != null && previousSeatIndex != index) {
@@ -9790,6 +9505,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         '';
     var quantity = (payload['quantity'] as num?)?.toInt() ?? 1;
     final targetIds = <String>[];
+    Object? showDurationMs = payload['show_duration_ms'];
 
     final targetIdsRaw = payload['target_ids'] ?? payload['targetIds'];
     if (targetIdsRaw is List) {
@@ -9813,11 +9529,17 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         giftIcon = metadata['gift_icon']?.toString() ?? '';
       }
       quantity = (metadata['quantity'] as num?)?.toInt() ?? quantity;
+      showDurationMs ??= metadata['show_duration_ms'];
       final targetId = metadata['target_id']?.toString() ?? '';
       if (targetId.isNotEmpty && !targetIds.contains(targetId)) {
         targetIds.add(targetId);
       }
     }
+    GiftShowDuration.remember(
+      svgaUrl: svgaUrl,
+      iconUrl: giftIcon,
+      ms: showDurationMs,
+    );
 
     return (
       isFullScreen: isFullScreen,
@@ -10089,7 +9811,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
   Future<void> _drainRepeatGiftQueue() async {
     if (_repeatGiftDraining) return;
     _repeatGiftDraining = true;
-    _isRepeatSending = true;
 
     final drainSw = Stopwatch()..start();
     final startDepth = _repeatGiftQueue.length;
@@ -10152,7 +9873,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     );
 
     _repeatGiftDraining = false;
-    _isRepeatSending = false;
   }
 
   void _clearRepeatGiftQueueAndSession() {
@@ -10948,14 +10668,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     _armBonusPattiHide();
   }
 
-  void _dismissBonusPattiForSender(String senderId) {
-    if (_bonusPatti?.senderId != senderId) return;
-    _bonusPattiHideTimer?.cancel();
-    _bonusPattiHideTimer = null;
-    if (!mounted) return;
-    setState(() => _bonusPattiVisible = false);
-  }
-
   void _maybeEnqueueLuckyWinFloats(Map<String, dynamic> luckyMsg) {
     unawaited(_enqueueLuckyWinFloatsAsync(luckyMsg));
   }
@@ -11206,6 +10918,11 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
     final quantity = (metadata['quantity'] as num?)?.toInt() ?? 1;
     final isFullScreen = _truthyBool(metadata['is_full_screen']);
     final svgaUrl = metadata['svga_url']?.toString() ?? '';
+    GiftShowDuration.remember(
+      svgaUrl: svgaUrl,
+      iconUrl: giftIcon,
+      ms: metadata['show_duration_ms'],
+    );
 
     _maybeShowFullScreenGiftAnimation(
       batchId: batchId,
@@ -11452,14 +11169,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         (metadata?['host_received'] as num?)?.toInt() ??
         (metadata?['host_share'] as num?)?.toInt() ??
         0;
-    final int priceCoins = (metadata?['price_coins'] as num?)?.toInt() ?? 0;
-    final int quantity = (metadata?['quantity'] as num?)?.toInt() ?? 1;
-    final int totalCoins = priceCoins * quantity;
-    final bool luckyBonusWon = metadata?['lucky_bonus_won'] == true;
-    final bool showLegacyLuckyBanner = false;
-    final int luckyBonusCoins =
-        (metadata?['lucky_bonus_coins'] as num?)?.toInt() ?? 0;
-
     final String receiverId = metadata?['target_id']?.toString() ?? '';
     String? receiverAvatar;
     if (receiverId.isNotEmpty) {
@@ -11487,11 +11196,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            margin: EdgeInsets.only(
-              top: 4,
-              bottom: showLegacyLuckyBanner ? 2 : 4,
-              left: 10,
-            ),
+            margin: const EdgeInsets.only(top: 4, bottom: 4, left: 10),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: const Color(0xFF1E1035).withValues(alpha: 0.8),
@@ -11578,28 +11283,6 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
               ],
             ),
           ),
-          if (showLegacyLuckyBanner)
-            Container(
-              margin: const EdgeInsets.only(bottom: 4, left: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.amber.shade700.withValues(alpha: 0.9),
-                    Colors.orange.shade800.withValues(alpha: 0.9),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '🎉 Sender lucky bonus: $luckyBonusCoins coins (more than $totalCoins gift!)',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -12895,7 +12578,12 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                         style: TextStyle(color: Colors.white),
                       ),
                       subtitle: Text(
-                        _audioRouteToSpeaker ? 'Speaker' : 'Earpiece',
+                        // Earpods / Bluetooth still win automatically when
+                        // connected; this only picks speaker vs earpiece for
+                        // the phone itself.
+                        _audioRouteToSpeaker
+                            ? 'Speaker (earpods auto)'
+                            : 'Earpiece (earpods auto)',
                         style: const TextStyle(color: Colors.white38),
                       ),
                       trailing: Switch(

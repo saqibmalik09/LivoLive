@@ -6,19 +6,30 @@
  */
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sk_live/app_root.dart' deferred as app_root;
 import 'package:sk_live/core/widgets/room_floating_bubble_overlay.dart';
 import 'package:sk_live/zone_errors.dart';
 
+// Release builds drop debugPrint. There are hundreds of call sites on hot
+// paths (seat snapshots, presence, voice), and each one went through the
+// throttled logcat writer on the UI isolate for output nobody reads.
+// Profile and debug builds keep their logs.
+void _silenceDebugPrintInRelease() {
+  if (kReleaseMode) debugPrint = (String? message, {int? wrapWidth}) {};
+}
+
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
+  _silenceDebugPrintInRelease();
   overlayMainEntry();
 }
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  _silenceDebugPrintInRelease();
 
   PaintingBinding.instance.imageCache.maximumSizeBytes = 60 << 20;
   PaintingBinding.instance.imageCache.maximumSize = 200;

@@ -883,6 +883,7 @@ class HiveCacheService {
         _str(g['image_url']),
         _str(g['svga_url']),
         _str(g['is_full_screen']),
+        _str(g['show_duration_ms']),
         _str(g['category_name']),
         _str(g['category_order']),
       ].join(':');
@@ -917,6 +918,8 @@ class HiveCacheService {
           'image_url': g['image_url']?.toString() ?? '',
           'svga_url': g['svga_url']?.toString() ?? '',
           'is_full_screen': g['is_full_screen'] == true,
+          if (g['show_duration_ms'] is num)
+            'show_duration_ms': (g['show_duration_ms'] as num).toInt(),
           'category_name': g['category_name']?.toString() ?? '',
           'category_order': g['category_order'] ?? 0,
           'category_icon': g['category_icon']?.toString() ?? '',

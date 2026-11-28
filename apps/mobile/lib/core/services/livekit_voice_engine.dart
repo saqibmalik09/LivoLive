@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:sk_live/core/services/voice_types.dart';
-import 'package:sk_live/core/util/debug_probe.dart'; // agent log
 
 import 'voice_engine.dart';
 
@@ -20,41 +19,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
   LiveKitVoiceEngine._();
   static final LiveKitVoiceEngine instance = LiveKitVoiceEngine._();
 
-  // #region agent log
-  final Stopwatch _dbgLoginSw = Stopwatch();
-  final Set<String> _dbgSpoke = <String>{};
-
-  /// Logs every change of the publisher peer connection state from the moment
-  /// the mic starts until it connects (or 10 s). Hypothesis F: the publisher
-  /// transport is not connected when the first publish happens, so audio only
-  /// reaches the SFU after a fresh ICE + DTLS handshake.
-  void _dbgWatchPublisher() {
-    final pc = _room?.engine.publisher?.pc;
-    if (pc == null) {
-      DebugProbe.log('F', 'livekit_voice_engine:publisher', 'publisher missing', {});
-      return;
-    }
-    final sw = Stopwatch()..start();
-    unawaited(() async {
-      var last = '';
-      while (sw.elapsedMilliseconds < 10000 && _room != null) {
-        final conn = (await pc.getConnectionState())?.name ?? 'null';
-        final ice = (await pc.getIceConnectionState())?.name ?? 'null';
-        final now = '$conn/$ice';
-        if (now != last) {
-          last = now;
-          DebugProbe.log('F', 'livekit_voice_engine:publisher', 'publisher pc state', {
-            'conn': conn,
-            'ice': ice,
-            'sinceMicStartMs': sw.elapsedMilliseconds,
-          });
-        }
-        if (conn.endsWith('Connected')) break;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      }
-    }());
-  }
-  // #endregion
   lk.Room? _room;
   lk.EventsListener<lk.RoomEvent>? _events;
   String? _appRoomId;
@@ -270,13 +234,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
     if (session.token.isEmpty || session.livekitUrl.isEmpty) {
       throw StateError('livekit: session is missing token or url');
     }
-    // #region agent log
-    final dbgPrevConnected = isConnected;
-    _dbgLoginSw
-      ..reset()
-      ..start();
-    _dbgSpoke.clear();
-    // #endregion
     // The old room is torn down in the background: waiting for its leave
     // and peer-connection close put a few hundred ms in front of every
     // room switch before the new room was even asked for.
@@ -312,42 +269,7 @@ class LiveKitVoiceEngine implements VoiceEngine {
         debugPrint('[LK] disconnected: $reason');
         _onTransportLost?.call(reason);
       })
-      // #region agent log
-      ..on<lk.LocalTrackPublishedEvent>((e) {
-        DebugProbe.log('A', 'livekit_voice_engine:events', 'local track published', {
-          'kind': e.publication.kind.name,
-          'sinceLoginMs': _dbgLoginSw.elapsedMilliseconds,
-        });
-      })
-      ..on<lk.TrackPublishedEvent>((e) {
-        DebugProbe.log('B', 'livekit_voice_engine:events', 'remote track published', {
-          'remote8': e.participant.identity.padRight(8).substring(0, 8),
-          'kind': e.publication.kind.name,
-        });
-      })
-      ..on<lk.TrackSubscribedEvent>((e) {
-        DebugProbe.log('B', 'livekit_voice_engine:events', 'remote track subscribed', {
-          'remote8': e.participant.identity.padRight(8).substring(0, 8),
-          'kind': e.publication.kind.name,
-        });
-        final remote = e.track;
-        if (remote is lk.RemoteAudioTrack) {
-          unawaited(_dbgSampleRemoteAudio(remote, e.participant.identity));
-        }
-      })
-      // #endregion
       ..on<lk.ActiveSpeakersChangedEvent>((e) {
-        // #region agent log
-        for (final p in e.speakers) {
-          if (p.audioLevel > 0.01 && _dbgSpoke.add(p.identity)) {
-            DebugProbe.log('C', 'livekit_voice_engine:events', 'first audible speaker', {
-              'who8': p.identity.padRight(8).substring(0, 8),
-              'isLocal': p is lk.LocalParticipant,
-              'level': p.audioLevel,
-            });
-          }
-        }
-        // #endregion
         final handler = _onSpeakerLevels;
         if (handler == null) return;
         final levels = <String, double>{
@@ -382,21 +304,13 @@ class LiveKitVoiceEngine implements VoiceEngine {
     // put Android on the Bluetooth SCO / call route with no media stream, so
     // earbuds stayed silent until the user sat and unmuted.
     await _applyAudioSessionFor(publishing: false);
-    // #region agent log
-    final dbgBeforeConnectMs = _dbgLoginSw.elapsedMilliseconds;
-    // #endregion
     await room.connect(session.livekitUrl, session.token);
-    // #region agent log
-    DebugProbe.log('A', 'livekit_voice_engine:loginRoom', 'room.connect done', {
-      'canPublishToken': session.canPublish,
-      'wasConnectedBefore': dbgPrevConnected,
-      'preConnectMs': dbgBeforeConnectMs,
-      'connectMs': _dbgLoginSw.elapsedMilliseconds - dbgBeforeConnectMs,
-    });
-    // #endregion
-    await _reassertSpeakerRoute();
-    // From here a headset plugged in mid-call re-routes straight away.
+    // Watch first: Bluetooth often enumerates a beat after connect, and the
+    // stream is how we catch that without waiting for a manual speaker tap.
     _startDeviceChangeWatch();
+    await _reassertSpeakerRoute();
+    // Earpods / car kits frequently appear only after SCO/A2DP settles.
+    _scheduleHeadsetRouteRetries();
     // The publisher transport's first ICE + DTLS costs ~1.9 s and used to land
     // on the first seat tap, which is the one that felt slow. Pay it just after
     // connect instead, once the connect burst is over.
@@ -474,15 +388,8 @@ class LiveKitVoiceEngine implements VoiceEngine {
     if (local == null) return false;
     if (enabled && !canPublishNow) {
       debugPrint('[LK] mic denied — token grant has canPublish=false');
-      // #region agent log
-      DebugProbe.log('A', 'livekit_voice_engine:setMicEnabled', 'mic denied no grant', {});
-      // #endregion
       return false;
     }
-    // #region agent log
-    final dbgMicSw = Stopwatch()..start();
-    if (enabled) _dbgWatchPublisher();
-    // #endregion
     try {
       if (enabled && _sessionPublishing != true) {
         await _enterCallMode();
@@ -500,18 +407,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
       // audio session on every mute/unmute — that churn yanked voice between
       // speaker and earpiece.
       await _setMicOnLocal(local, enabled);
-      // #region agent log
-      if (enabled) unawaited(_dbgSampleLocalAudio());
-      // #endregion
-      // #region agent log
-      if (enabled) {
-        DebugProbe.log('A', 'livekit_voice_engine:setMicEnabled', 'mic enabled', {
-          'ms': dbgMicSw.elapsedMilliseconds,
-          'liveTrack': hasLiveMicTrack,
-          'sinceLoginMs': _dbgLoginSw.elapsedMilliseconds,
-        });
-      }
-      // #endregion
       return hasLiveMicTrack == enabled;
     } catch (e) {
       debugPrint('[LK] setMicEnabled($enabled): $e');
@@ -519,60 +414,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
     }
   }
 
-  // #region agent log
-  // Loudness evidence for "voice is very quiet for 1-2 s after taking the mic":
-  // sender side = level of what this phone captures and sends, receiver side =
-  // energy / concealment / jitter-buffer of what the listener actually decodes.
-  bool _dbgSamplingLocal = false;
-  Future<void> _dbgSampleLocalAudio() async {
-    if (_dbgSamplingLocal) return;
-    _dbgSamplingLocal = true;
-    final sw = Stopwatch()..start();
-    try {
-      for (var i = 0; i < 24; i++) {
-        final pub = _room?.localParticipant?.getTrackPublicationBySource(lk.TrackSource.microphone);
-        final track = pub?.track;
-        if (track is lk.LocalAudioTrack) {
-          final s = await track.getSenderStats();
-          DebugProbe.log('H', 'livekit_voice_engine:localAudio', 'sender level', {
-            't': sw.elapsedMilliseconds,
-            'level': s?.audioSourceStats?.audioLevel,
-            'energy': s?.audioSourceStats?.totalAudioEnergy,
-            'muted': pub?.muted,
-            'lost': s?.packetsLost,
-          });
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 250));
-      }
-    } catch (e) {
-      debugPrint('[LK] dbg local audio sample: $e');
-    } finally {
-      _dbgSamplingLocal = false;
-    }
-  }
-
-  Future<void> _dbgSampleRemoteAudio(lk.RemoteAudioTrack track, String identity) async {
-    final sw = Stopwatch()..start();
-    try {
-      for (var i = 0; i < 24; i++) {
-        final s = await track.getReceiverStats();
-        DebugProbe.log('H', 'livekit_voice_engine:remoteAudio', 'receiver stats', {
-          'who8': identity.padRight(8).substring(0, 8),
-          't': sw.elapsedMilliseconds,
-          'energy': s?.totalAudioEnergy,
-          'concealed': s?.concealedSamples,
-          'silentConcealed': s?.silentConcealedSamples,
-          'jitterDelay': s?.jitterBufferDelay,
-          'received': s?.packetsReceived,
-          'lost': s?.packetsLost,
-        });
-        await Future<void>.delayed(const Duration(milliseconds: 250));
-      }
-    } catch (e) {
-      debugPrint('[LK] dbg remote audio sample: $e');
-    }
-  }
-  // #endregion
 
   // ---------------------------------------------------------- speak warm-up
   //
@@ -609,19 +450,8 @@ class LiveKitVoiceEngine implements VoiceEngine {
       // ignore: invalid_use_of_internal_member
       await room.engine.ensurePublisherConnected();
       debugPrint('[LK] publisher warm ms=${sw.elapsedMilliseconds}');
-      // #region agent log
-      DebugProbe.log('F', 'livekit_voice_engine:warmPublisher', 'publisher warmed', {
-        'ms': sw.elapsedMilliseconds,
-      });
-      // #endregion
     } catch (e) {
       debugPrint('[LK] publisher warm failed after ${sw.elapsedMilliseconds}ms: $e');
-      // #region agent log
-      DebugProbe.log('F', 'livekit_voice_engine:warmPublisher', 'publisher warm failed', {
-        'ms': sw.elapsedMilliseconds,
-        'error': e.toString(),
-      });
-      // #endregion
     }
   }
 
@@ -651,11 +481,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
       _precapturedMic = track;
       _precaptureExpiry?.cancel();
       _precaptureExpiry = Timer(_precaptureTtl, () => unawaited(discardPrecapturedMic()));
-      // #region agent log
-      DebugProbe.log('A', 'livekit_voice_engine:precaptureMic', 'mic precaptured', {
-        'ms': sw.elapsedMilliseconds,
-      });
-      // #endregion
     } catch (e) {
       debugPrint('[LK] mic precapture failed after ${sw.elapsedMilliseconds}ms: $e');
       try {
@@ -693,33 +518,19 @@ class LiveKitVoiceEngine implements VoiceEngine {
     await _applyAudioSessionFor(publishing: true);
     await _reassertSpeakerRoute();
     // Mode switch briefly drops headset from the enumerated list, and
-    // Bluetooth SCO often needs a second pin after it appears. Re-assert
-    // twice so unmute does not leave the room on the loudspeaker.
-    _postUnmuteRouteRetry?.cancel();
-    _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 350), () {
-      unawaited(_reassertSpeakerRoute());
-      _postUnmuteRouteRetry = Timer(const Duration(milliseconds: 500), () {
-        unawaited(_reassertSpeakerRoute());
-      });
-    });
+    // Bluetooth SCO often needs a second pin after it appears.
+    _scheduleHeadsetRouteRetries();
   }
 
   Future<void> _prepareNow(lk.Room room) async {
-    final sw = Stopwatch()..start();
     // The call-mode switch used to run on "Open Mic", in front of the unmute.
     // Done here it overlaps the dialog. A dismissed dialog switches back in
     // discardPrecapturedMic.
     await _enterCallMode();
     await Future.wait<void>(<Future<void>>[warmPublisher(), precaptureMic()]);
-    // #region agent log
-    final dbgWarmCaptureMs = sw.elapsedMilliseconds;
-    // #endregion
     final granted = await waitForPublishPermission(
       timeout: const Duration(seconds: 4),
     );
-    // #region agent log
-    final dbgGrantAtMs = sw.elapsedMilliseconds;
-    // #endregion
     final local = room.localParticipant;
     final track = _precapturedMic;
     if (!granted ||
@@ -727,13 +538,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
         track == null ||
         !identical(room, _room) ||
         local.getTrackPublicationBySource(lk.TrackSource.microphone) != null) {
-      // #region agent log
-      DebugProbe.log('A', 'livekit_voice_engine:prepareToSpeak', 'prepare skipped publish', {
-        'granted': granted,
-        'hasTrack': track != null,
-        'ms': sw.elapsedMilliseconds,
-      });
-      // #endregion
       return;
     }
     _precapturedMic = null;
@@ -743,14 +547,6 @@ class LiveKitVoiceEngine implements VoiceEngine {
       _preparedSid = publication.sid;
       _precaptureExpiry?.cancel();
       _precaptureExpiry = Timer(_precaptureTtl, () => unawaited(discardPrecapturedMic()));
-      // #region agent log
-      DebugProbe.log('A', 'livekit_voice_engine:prepareToSpeak', 'prepared muted publish', {
-        'ms': sw.elapsedMilliseconds,
-        'warmAndCaptureMs': dbgWarmCaptureMs,
-        'grantAtMs': dbgGrantAtMs,
-        'publishMs': sw.elapsedMilliseconds - dbgGrantAtMs,
-      });
-      // #endregion
     } catch (e) {
       debugPrint('[LK] prepareToSpeak publish failed: $e');
       try {
@@ -880,14 +676,17 @@ class LiveKitVoiceEngine implements VoiceEngine {
 
   /// Re-apply the user's speaker choice after an audio session change.
   ///
-  /// Listener (media playback) and publisher (communication) need different
-  /// routes. Media already goes to a connected headset via A2DP / wired; the
-  /// communication path goes through AudioSwitch, whose device priority is
-  /// Bluetooth → wired headset → **earpiece** → speakerphone. The earpiece
-  /// outranks the speaker, so an unforced preference loses and the room is
-  /// heard from the receiver the moment the mic goes live. Forcing is the
-  /// only way to win that choice when publishing — but only with no headset,
-  /// because forcing would otherwise yank audio out of the headphones.
+  /// AudioSwitch preferred lists (never forced):
+  ///   speaker preferred -> [Bluetooth, Wired, Speakerphone, Earpiece]
+  ///   speaker off       -> [Bluetooth, Wired, Earpiece, Speakerphone]
+  /// So a connected headset always wins without a manual Output Device tap.
+  ///
+  /// The old path used `force: true` whenever the Speaker toggle was on and
+  /// headset detection missed branded earpods (AirPods, Galaxy Buds, …).
+  /// Forced order puts Speakerphone first and keeps audio on the loudspeaker
+  /// until the user switches to Earpiece by hand. Never force here — the
+  /// Speaker toggle only beats the built-in earpiece when nothing is plugged
+  /// in / paired.
   Future<void> _reassertSpeakerRoute() async {
     try {
       final outputs = await _audioOutputDevices();
@@ -904,8 +703,8 @@ class LiveKitVoiceEngine implements VoiceEngine {
         // Viewer / mediaPlayback. Never call selectAudioOutput on Bluetooth
         // here: that switches the phone onto SCO (call audio), and while the
         // session is still mediaPlayback there is nothing on that channel —
-        // earbuds go silent. Leave speaker preference off so the OS keeps
-        // A2DP / wired media on the headset.
+        // earbuds go silent. Clear any leftover force-speaker so A2DP / wired
+        // media stays on the headset.
         if (headset) {
           await lk.AudioManager.instance.setSpeakerOutputPreferred(
             false,
@@ -916,6 +715,11 @@ class LiveKitVoiceEngine implements VoiceEngine {
             true,
             force: false,
           );
+        } else {
+          await lk.AudioManager.instance.setSpeakerOutputPreferred(
+            false,
+            force: false,
+          );
         }
         debugPrint(
           '[LK] speaker route (listen): toggle=$_speakerOn headset=$headset '
@@ -924,44 +728,55 @@ class LiveKitVoiceEngine implements VoiceEngine {
         return;
       }
 
-      // AudioSwitch picks the first available device from a preferred list,
-      // and only the FORCED list puts the speaker ahead of the earpiece:
-      //   forced     -> [Speakerphone, Bluetooth, Wired, Earpiece]
-      //   preferred  -> [Bluetooth, Wired, Speakerphone, Earpiece]
-      //   neither    -> [Bluetooth, Wired, Earpiece, Speakerphone]
-      //
-      // With a headset connected we must never ask for (or flip through) the
-      // loudspeaker: the old nudge called setSpeakerOutputPreferred(true) first
-      // and yanked playback out of hands-free on every unmute.
-      final wantSpeaker = _speakerOn && !headset;
-      final force = wantSpeaker;
-
       if (headset) {
-        // Clear any stuck forced-speaker preference from a previous unmute,
-        // then pin the Bluetooth / wired output for call audio (SCO).
+        // Clear any stuck forced-speaker preference from a previous build /
+        // unmute, then pin the Bluetooth / wired output for call audio (SCO).
         await lk.AudioManager.instance.setSpeakerOutputPreferred(
           false,
           force: false,
         );
         await _selectHeadsetOutput(outputs);
       } else {
+        // Prefer speaker for the party room (beats earpiece). Never force —
+        // that would beat a headset that appears a moment later.
         // AudioSwitch.setPreferredDeviceList no-ops when the list is unchanged.
         // Flip once so the real preference re-sorts and re-selects.
-        await lk.AudioManager.instance.setSpeakerOutputPreferred(!wantSpeaker);
+        await lk.AudioManager.instance.setSpeakerOutputPreferred(
+          !_speakerOn,
+          force: false,
+        );
         await Future<void>.delayed(const Duration(milliseconds: 80));
         await lk.AudioManager.instance.setSpeakerOutputPreferred(
-          wantSpeaker,
-          force: force,
+          _speakerOn,
+          force: false,
         );
       }
       debugPrint(
-        '[LK] speaker route (publish): pref=$wantSpeaker (toggle=$_speakerOn) '
-        'headset=$headset force=$force '
+        '[LK] speaker route (publish): toggle=$_speakerOn headset=$headset '
+        'force=false '
         'devices=${outputs.map((d) => '${d.deviceId}/${d.label}').toList()}',
       );
     } catch (e) {
       debugPrint('[LK] speaker route re-assert failed: $e');
     }
+  }
+
+  /// Bluetooth / USB earpods often show up hundreds of ms after join or after
+  /// the call-mode switch. Re-run routing a few times so the user does not
+  /// have to open Output Device by hand.
+  void _scheduleHeadsetRouteRetries() {
+    _postUnmuteRouteRetry?.cancel();
+    const delays = <int>[400, 1200, 2500];
+    var i = 0;
+    void arm() {
+      if (i >= delays.length) return;
+      _postUnmuteRouteRetry = Timer(Duration(milliseconds: delays[i++]), () {
+        unawaited(_reassertSpeakerRoute());
+        arm();
+      });
+    }
+
+    arm();
   }
 
   /// Prefer a connected Bluetooth / wired / USB headset on Android.
@@ -996,19 +811,50 @@ class LiveKitVoiceEngine implements VoiceEngine {
     }
   }
 
-  /// A route is a headset by what the platform calls its *type*, never by the
-  /// name the hardware gave itself. Android reports `deviceId` / `groupId` as
-  /// the AudioSwitch kind (`bluetooth`, `wired-headset`, `speaker`,
-  /// `earpiece`) while `label` is the product name — "AirPods Pro",
-  /// "Galaxy Buds", "boAt Rockerz". iOS reports `groupId` as the
-  /// AVAudioSession port type (`BluetoothHFP`, `Headphones`, `USBAudio`).
-  /// Matching the label alone therefore saw no headset for every branded pair
-  /// of earbuds, so the route was forced to the loudspeaker and hands-free
-  /// stayed silent.
-  static bool _isHeadsetDevice(lk.MediaDevice d) =>
-      _isHeadsetRouteId(d.deviceId) ||
-      _isHeadsetRouteId(d.groupId ?? '') ||
-      _isHeadsetLabel(d.label);
+  /// External audio (earpods / headset / car / USB) vs the phone's own
+  /// speaker and earpiece.
+  ///
+  /// Android reports `deviceId` / `groupId` as the AudioSwitch kind
+  /// (`bluetooth`, `wired-headset`, `speaker`, `earpiece`) while `label` is
+  /// the product name — "AirPods Pro", "Galaxy Buds", "boAt Rockerz". iOS
+  /// reports `groupId` as the AVAudioSession port type (`BluetoothHFP`,
+  /// `Headphones`, `USBAudio`). Matching only generic words in the label
+  /// missed every branded pair, so routing treated them as missing and kept
+  /// the loudspeaker. Anything that is not the built-in speaker/earpiece is
+  /// treated as an external route.
+  static bool _isHeadsetDevice(lk.MediaDevice d) {
+    if (_isBuiltinPhoneOutput(d)) return false;
+    if (_isHeadsetRouteId(d.deviceId) ||
+        _isHeadsetRouteId(d.groupId ?? '') ||
+        _isHeadsetLabel(d.label)) {
+      return true;
+    }
+    // Branded earbuds often only expose a product label and a non-builtin id.
+    return true;
+  }
+
+  static bool _isBuiltinPhoneOutput(lk.MediaDevice d) {
+    for (final raw in [d.deviceId, d.groupId ?? '', d.label]) {
+      final id = raw.toLowerCase().trim();
+      if (id.isEmpty) continue;
+      if (id == 'speaker' ||
+          id == 'speakerphone' ||
+          id == 'earpiece' ||
+          id == 'receiver' ||
+          id == 'phone' ||
+          id == 'built-in speaker' ||
+          id == 'built-in receiver') {
+        return true;
+      }
+      if (id.contains('built-in') &&
+          (id.contains('speaker') ||
+              id.contains('receiver') ||
+              id.contains('earpiece'))) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   static bool _isBluetoothDevice(lk.MediaDevice d) {
     for (final v in [d.deviceId, d.groupId ?? '', d.label]) {
@@ -1016,7 +862,9 @@ class LiveKitVoiceEngine implements VoiceEngine {
       if (s.contains('bluetooth') ||
           s.contains('a2dp') ||
           s.contains('hfp') ||
-          s.contains('sco')) {
+          s.contains('sco') ||
+          s.contains('airpod') ||
+          s.contains('buds')) {
         return true;
       }
     }
@@ -1028,10 +876,17 @@ class LiveKitVoiceEngine implements VoiceEngine {
     if (id.isEmpty) return false;
     // The built-in routes on both platforms: Android "speaker" / "earpiece",
     // iOS port types "Speaker" / "Receiver".
-    if (id == 'speaker' || id == 'earpiece' || id == 'receiver') return false;
+    if (id == 'speaker' ||
+        id == 'speakerphone' ||
+        id == 'earpiece' ||
+        id == 'receiver') {
+      return false;
+    }
     return id.contains('bluetooth') ||
         id.contains('headset') ||
         id.contains('headphone') ||
+        id.contains('earpod') ||
+        id.contains('earphone') ||
         id.contains('wired') ||
         id.contains('usb') ||
         id.contains('a2dp') ||
@@ -1046,6 +901,11 @@ class LiveKitVoiceEngine implements VoiceEngine {
     return l.contains('bluetooth') ||
         l.contains('headset') ||
         l.contains('headphone') ||
+        l.contains('earpod') ||
+        l.contains('earphone') ||
+        l.contains('airpod') ||
+        l.contains('buds') ||
+        l.contains('beats') ||
         l.contains('wired') ||
         l.contains('usb') ||
         l.contains('a2dp') ||

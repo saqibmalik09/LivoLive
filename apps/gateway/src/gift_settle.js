@@ -53,9 +53,17 @@ async function loadGift(giftId) {
   cacheSet(giftCache, key, gift, GIFT_CACHE_TTL_MS, GIFT_CACHE_MAX);
   return gift;
 }
+// Centre hold for every viewer; 5 s until the column is migrated.
+function showDurationMs(gift) {
+  const raw = gift ? gift.show_duration_ms : null;
+  if (raw === null || raw === undefined || raw === "") return 5000;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms)) return 5000;
+  return Math.max(0, Math.min(60000, Math.round(ms)));
+}
 async function loadGiftFromDb(giftId) {
   const { rows: rows } = await db.giftQuery(
-    `SELECT si.id, si.name, si.price_coins,\n            coalesce(si.image_url, '') AS icon_url,\n            si.svga_url, si.is_full_screen,\n            lower(coalesce(sc.name, '')) AS category_name\n     FROM public.shop_items si\n     LEFT JOIN public.shop_categories sc ON sc.id = si.category_id\n     WHERE si.id = $1 AND si.is_active = TRUE\n     LIMIT 1`,
+    `SELECT si.id, si.name, si.price_coins,\n            coalesce(si.image_url, '') AS icon_url,\n            si.svga_url, si.is_full_screen,\n            (to_jsonb(si)->>'show_duration_ms')::int AS show_duration_ms,\n            lower(coalesce(sc.name, '')) AS category_name\n     FROM public.shop_items si\n     LEFT JOIN public.shop_categories sc ON sc.id = si.category_id\n     WHERE si.id = $1 AND si.is_active = TRUE\n     LIMIT 1`,
     [giftId],
   );
   return rows[0] || null;
@@ -233,6 +241,7 @@ function buildUiMessage({
     gift_icon: gift.icon_url,
     svga_url: gift.svga_url,
     is_full_screen: gift.is_full_screen === true,
+    show_duration_ms: showDurationMs(gift),
     host_received: hostReceived,
     host_share: hostReceived,
     charm_credit: charmCredit,
@@ -321,6 +330,7 @@ async function buildNotifyFromSettle({
         icon_url: gift.icon_url,
         svga_url: gift.svga_url,
         is_full_screen: gift.is_full_screen,
+        show_duration_ms: gift.show_duration_ms,
       },
       quantity: quantity,
       animationBatchId: animationBatchId,
@@ -363,6 +373,7 @@ async function buildNotifyFromSettle({
     quantity: quantity,
     is_full_screen: gift.is_full_screen === true,
     svga_url: gift.svga_url || "",
+    show_duration_ms: showDurationMs(gift),
     lucky_engine: "gateway",
     settled_on_gateway: true,
     seat_gift_deltas: seatGiftDeltas,

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/util/app_image_cache.dart';
+import 'package:sk_live/core/util/gift_show_duration.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
 
 final supabase = Supabase.instance.client;
@@ -50,6 +51,9 @@ class ShopItem {
   final bool isGift;
   final bool isFullScreen;
 
+  /// Centre hold on send; null when the row predates the column.
+  final int? showDurationMs;
+
   ShopItem({
     required this.id,
     required this.categoryId,
@@ -67,7 +71,16 @@ class ShopItem {
     this.categoryName,
     this.isGift = false,
     this.isFullScreen = false,
-  });
+    this.showDurationMs,
+  }) {
+    if (isGift && showDurationMs != null) {
+      GiftShowDuration.remember(
+        svgaUrl: svgaUrl,
+        iconUrl: imageUrl,
+        ms: showDurationMs,
+      );
+    }
+  }
 
   factory ShopItem.fromMap(Map<String, dynamic> map) {
     int level = map['required_vip_level'] ?? 0;
@@ -77,6 +90,16 @@ class ShopItem {
       if (match != null) {
         level = int.parse(match.group(1)!);
       }
+    }
+
+    final showMs = (map['show_duration_ms'] as num?)?.toInt();
+    if (showMs != null) {
+      // The gateway echoes the raw column values, not the normalized URLs.
+      GiftShowDuration.remember(
+        svgaUrl: map['svga_url']?.toString(),
+        iconUrl: map['image_url']?.toString(),
+        ms: showMs,
+      );
     }
 
     return ShopItem(
@@ -96,6 +119,7 @@ class ShopItem {
       categoryName: map['shop_categories']?['name'] ?? map['category_name'],
       isGift: map['is_gift'] ?? false,
       isFullScreen: map['is_full_screen'] ?? false,
+      showDurationMs: showMs,
     );
   }
 
@@ -112,6 +136,7 @@ class ShopItem {
       'image_url': imageUrl ?? '',
       'svga_url': svgaUrl ?? '',
       'is_full_screen': isFullScreen,
+      if (showDurationMs != null) 'show_duration_ms': showDurationMs,
       'category_name': categoryName,
       'category_order': categoryOrder,
       'category_icon': categoryIcon ?? '',
@@ -131,6 +156,7 @@ class ShopItem {
       categoryName: map['category_name']?.toString(),
       isGift: true,
       isFullScreen: map['is_full_screen'] == true,
+      showDurationMs: (map['show_duration_ms'] as num?)?.toInt(),
     );
   }
 }
@@ -220,11 +246,9 @@ GiftCatalog? _catalogFromCache(List<Map<String, dynamic>>? rows) {
 Future<GiftCatalog> _fetchGiftCatalog() async {
   final response = await supabase
       .from('shop_items')
-      .select(
-        'id, category_id, name, price_coins, image_url, svga_url, '
-        'is_full_screen, is_gift, is_active, '
-        'shop_categories(id, name, icon_url, display_order)',
-      )
+      // `*` so show_duration_ms is read where migrated without failing the
+      // whole catalog on a database that does not have the column yet.
+      .select('*, shop_categories(id, name, icon_url, display_order)')
       .eq('is_gift', true)
       .eq('is_active', true)
       .order('price_coins', ascending: true);
