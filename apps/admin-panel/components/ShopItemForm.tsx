@@ -21,6 +21,10 @@ interface ShopItemFormProps {
   item?: any;
   categories: any[];
 }
+// MP4 shares the svga_url column; the app picks the player by extension.
+function isVideoAnimationUrl(url: string): boolean {
+  return /\.(mp4|m4v|mov|webm)(\?|#|$)/i.test(url.trim());
+}
 export function ShopItemForm({ item, categories }: ShopItemFormProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -29,6 +33,9 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
   const [svgaUrl, setSvgaUrl] = useState(item?.svga_url || "");
   const [svgaPreviewSrc, setSvgaPreviewSrc] = useState(item?.svga_url || "");
   const [svgaPreviewKey, setSvgaPreviewKey] = useState(Date.now());
+  const [previewIsVideo, setPreviewIsVideo] = useState(
+    isVideoAnimationUrl(item?.svga_url || ""),
+  );
   const [previewMode, setPreviewMode] = useState<"image" | "svga">(
     item?.svga_url ? "svga" : "image",
   );
@@ -52,6 +59,7 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
       }
       const localUrl = URL.createObjectURL(file);
       svgaBlobRef.current = localUrl;
+      setPreviewIsVideo(file.type.startsWith("video/") || isVideoAnimationUrl(file.name));
       setSvgaPreviewSrc(localUrl);
       setSvgaPreviewKey(Date.now());
       setPreviewMode("svga");
@@ -130,11 +138,27 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
           <div className="aspect-square bg-black/60 flex items-center justify-center border-b border-white/5 relative group">
             {showSvgaPreview ? (
               <div className="absolute inset-4 overflow-hidden rounded-xl">
-                <SvgaPreview
-                  key={svgaPreviewKey}
-                  src={publicMediaUrl(svgaPreviewSrc || svgaUrl)}
-                  className="absolute inset-0 h-full w-full"
-                />
+                {previewIsVideo ? (
+                  <video
+                    key={svgaPreviewKey}
+                    src={
+                      (svgaPreviewSrc || svgaUrl).startsWith("blob:")
+                        ? svgaPreviewSrc || svgaUrl
+                        : publicMediaUrl(svgaPreviewSrc || svgaUrl)
+                    }
+                    className="absolute inset-0 h-full w-full object-contain"
+                    autoPlay
+                    loop
+                    controls
+                    playsInline
+                  />
+                ) : (
+                  <SvgaPreview
+                    key={svgaPreviewKey}
+                    src={publicMediaUrl(svgaPreviewSrc || svgaUrl)}
+                    className="absolute inset-0 h-full w-full"
+                  />
+                )}
               </div>
             ) : imageUrl ? (
               <img
@@ -174,7 +198,7 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
                       : "bg-black/60 text-white/70 border border-white/10"
                   }`}
                 >
-                  SVGA
+                  {previewIsVideo ? "MP4" : "SVGA"}
                 </button>
               </div>
             )}
@@ -215,13 +239,13 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-bold uppercase text-white/30 tracking-widest px-1 flex items-center gap-2">
-                  <Sparkles size={10} /> SVGA Animation
+                  <Sparkles size={10} /> SVGA / MP4 Animation
                 </label>
                 {svgaUrl && <CheckCircle2 size={12} className="text-blue-500" />}
               </div>
               <MediaDropPasteZone
-                accept=".svga,application/octet-stream"
-                label="Drop SVGA file"
+                accept=".svga,.mp4,video/mp4,application/octet-stream"
+                label="Drop SVGA or MP4 file"
                 hint="Drag & drop · click browse"
                 uploading={uploadingSvga}
                 disabled={uploadingImage}
@@ -234,15 +258,18 @@ export function ShopItemForm({ item, categories }: ShopItemFormProps) {
                 onChange={(e) => {
                   setSvgaUrl(e.target.value);
                   setSvgaPreviewSrc(e.target.value);
+                  setPreviewIsVideo(isVideoAnimationUrl(e.target.value));
                   setSvgaPreviewKey(Date.now());
                   if (e.target.value) setPreviewMode("svga");
                 }}
-                placeholder="Or paste SVGA URL https://.../.svga"
+                placeholder="Or paste SVGA / MP4 URL https://.../.svga or .mp4"
                 className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500/50 transition-all text-xs font-mono"
               />
               {(svgaPreviewSrc || svgaUrl) && (
                 <p className="text-[10px] text-blue-300/80">
-                  SVGA plays in the preview above — switch Image / SVGA tabs to compare.
+                  {previewIsVideo
+                    ? "MP4 plays in the preview above with sound. Use a black background; the app hides black so only the effect shows."
+                    : "SVGA plays in the preview above — switch Image / SVGA tabs to compare."}
                 </p>
               )}
             </div>

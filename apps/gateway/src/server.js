@@ -43,6 +43,9 @@ const GIFT_GLOBAL_INFLIGHT_MAX = Math.max(
   Number(process.env.GIFT_GLOBAL_INFLIGHT_MAX) || 64,
 );
 let giftGlobalInflight = 0;
+const GIFT_WARM_WINDOW_MS = 120e3;
+const GIFT_WARM_MAX_KEYS = 5000;
+const giftWarmSentAt = new Map();
 const PORT = Number(process.env.PORT || 3e3);
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
@@ -2722,6 +2725,29 @@ io.on("connection", (socket) => {
   socket.on("gift:notify", (payload = {}, ack) => {
     processGiftNotify(socket, payload, ack);
   });
+  // Tells the room which animation is coming while the gift settles, so
+  // viewers download/decode it in parallel with the SQL instead of after the
+  // room_gift. Display-free, so a gift that then fails on balance shows
+  // nothing. Once per room+gift per window; combos add no fan-out.
+  function warmGiftAnimationForRoom(socket, roomId, gift) {
+    const url = String(gift.svga_url || "").trim();
+    if (!url) return;
+    const key = `${roomId}:${gift.id}`;
+    const now = Date.now();
+    const last = giftWarmSentAt.get(key);
+    if (last && now - last < GIFT_WARM_WINDOW_MS) return;
+    giftWarmSentAt.delete(key);
+    giftWarmSentAt.set(key, now);
+    if (giftWarmSentAt.size > GIFT_WARM_MAX_KEYS) {
+      giftWarmSentAt.delete(giftWarmSentAt.keys().next().value);
+    }
+    socket.to(`room:${roomId}`).emit("gift:warm", {
+      room_id: roomId,
+      gift_id: gift.id,
+      svga_url: url,
+      is_full_screen: gift.is_full_screen === true,
+    });
+  }
   async function handleGiftSend(payload = {}, ack, queuedAt = Date.now()) {
     const startedAt = Date.now();
     try {
@@ -2783,6 +2809,7 @@ io.on("connection", (socket) => {
         await pubClient.del(`gift:send:done:${clientOpId}`);
         return ackErr(ack, "Gift not found or inactive");
       }
+      warmGiftAnimationForRoom(socket, roomId, gift);
       // Every category settles here, not just lucky. The old split sent normal
       // gifts as a Supabase RPC from the phone followed by a second socket call
       // to broadcast — two sequential round trips on the sender's connection

@@ -13,6 +13,10 @@ class RaveSVGAPlayer extends StatefulWidget {
   final bool autoPlay;
   final double playbackSpeed;
 
+  /// Scaling quality of the images inside the animation. Low is enough for
+  /// small tiles; gifts stretched to the screen need medium to stay crisp.
+  final FilterQuality filterQuality;
+
   const RaveSVGAPlayer({
     super.key,
     required this.resUrl,
@@ -23,6 +27,7 @@ class RaveSVGAPlayer extends StatefulWidget {
     this.onMovieLoaded,
     this.autoPlay = true,
     this.playbackSpeed = 1.0,
+    this.filterQuality = FilterQuality.low,
   });
 
   @override
@@ -139,7 +144,12 @@ class RaveSVGAPlayerState extends State<RaveSVGAPlayer>
     return ColoredBox(
       color: Colors.transparent,
       child: RepaintBoundary(
-        child: SVGAImage(_controller!, fit: widget.fit, clearsAfterStop: true),
+        child: SVGAImage(
+          _controller!,
+          fit: widget.fit,
+          clearsAfterStop: true,
+          filterQuality: widget.filterQuality,
+        ),
       ),
     );
   }

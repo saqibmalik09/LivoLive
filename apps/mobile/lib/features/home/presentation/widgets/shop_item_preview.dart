@@ -3,6 +3,8 @@ import 'package:sk_live/core/l10n/l10n_ext.dart';
 import 'package:sk_live/core/widgets/dynamic_chat_bubble.dart';
 import 'package:sk_live/core/widgets/stretch_chat_bubble.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
+import 'package:sk_live/core/widgets/gift_video_player.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/widgets/app_network_image.dart';
 import 'package:sk_live/core/providers/shop_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -79,6 +81,12 @@ class _ShopItemPreviewState extends State<ShopItemPreview> {
                         iconSize: 32,
                       ),
                     ),
+                  )
+                : MediaUrlUtil.isVideoUrl(widget.item.svgaUrl)
+                ? GiftVideoPlayer(
+                    url: widget.item.svgaUrl!,
+                    muted: false,
+                    repeat: true,
                   )
                 : widget.item.svgaUrl != null
                 ? RaveSVGAPlayer(

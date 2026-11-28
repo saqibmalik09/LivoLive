@@ -42,6 +42,12 @@ class AppImageCache {
         ..concurrentFetches = _concurrentFetches,
     ),
   );
+
+  /// The same "fresh for at least a day" rule for other disk caches of
+  /// storage assets, which answer `no-cache` too.
+  static FileService minFreshFileService({required int concurrentFetches}) =>
+      _MinFreshFileService(HttpFileService(), _minFreshFor)
+        ..concurrentFetches = concurrentFetches;
 }
 
 class _MinFreshFileService extends FileService {

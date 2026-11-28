@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/widgets/gift_video_player.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 
 /// The full-screen gift animation, with a fallback for assets that never come.
@@ -16,11 +18,16 @@ class RoomFullScreenGift extends StatefulWidget {
     required this.svgaUrl,
     required this.onFinished,
     this.fallbackIconUrl = '',
+    this.muted = false,
   });
 
+  /// SVGA or MP4; an MP4 plays with its sound unless [muted].
   final String svgaUrl;
   final String fallbackIconUrl;
   final VoidCallback onFinished;
+
+  /// The room speaker is off, so the MP4 plays silently.
+  final bool muted;
 
   /// How long the SVGA has to start before the icon stands in for it.
   static const Duration decodeDeadline = Duration(milliseconds: 1600);
@@ -109,14 +116,26 @@ class _RoomFullScreenGiftState extends State<RoomFullScreenGift> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        RaveSVGAPlayer(
-          resUrl: widget.svgaUrl,
-          repeat: false,
-          fit: BoxFit.cover,
-          playbackSpeed: 1.5,
-          onLoaded: _onSvgaLoaded,
-          onFinished: _onSvgaFinished,
-        ),
+        if (MediaUrlUtil.isVideoUrl(widget.svgaUrl))
+          GiftVideoPlayer(
+            url: widget.svgaUrl,
+            muted: widget.muted,
+            repeat: false,
+            fit: BoxFit.cover,
+            streamIfNotCached: true,
+            onLoaded: _onSvgaLoaded,
+            onFinished: _onSvgaFinished,
+          )
+        else
+          RaveSVGAPlayer(
+            resUrl: widget.svgaUrl,
+            repeat: false,
+            fit: BoxFit.cover,
+            playbackSpeed: 1.5,
+            filterQuality: FilterQuality.medium,
+            onLoaded: _onSvgaLoaded,
+            onFinished: _onSvgaFinished,
+          ),
         if (_showFallback && widget.fallbackIconUrl.isNotEmpty)
           Center(
             child: TweenAnimationBuilder<double>(

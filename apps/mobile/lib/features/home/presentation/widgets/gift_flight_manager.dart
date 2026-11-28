@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:sk_live/core/util/app_image_cache.dart';
 import 'package:sk_live/core/util/gift_show_duration.dart';
+import 'package:sk_live/core/util/gift_video_cache.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:sk_live/core/util/svga_cache.dart';
+import 'package:sk_live/core/widgets/gift_video_player.dart';
 import 'package:sk_live/core/widgets/svga_player.dart';
 
 class GiftFlightRequest {
@@ -114,7 +116,14 @@ class GiftFlightManagerState extends State<GiftFlightManager>
 
   /// Longest a first-time gift waits in the centre for its SVGA before
   /// holding the icon instead.
-  static const Duration _heroSvgaWait = Duration(seconds: 8);
+  static const Duration _heroSvgaWait = Duration(seconds: 5);
+
+  /// Minimum time an SVGA that arrived late stays on screen before flying.
+  static const int _heroLateSvgaShowMs = 1500;
+
+  /// Hold for a first-send gift that a newer gift asked to release while its
+  /// SVGA was still downloading: long enough to see the animation.
+  static const int _heroReleasedHoldMs = 1400;
 
   /// A gift from the same sender inside this gap is a combo: it skips the
   /// hold so fast tapping keeps flying fast.
@@ -293,6 +302,12 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       final hero = flight.hero;
       if (hero == null || flight.releaseTimer != null) continue;
       if (flight.controller.value >= hero.holdEnd) continue;
+      if (hero.waitingForSvga) {
+        // Releasing now would fly the listing PNG away on a gift's first
+        // send; keep it for a short look once the SVGA is ready instead.
+        hero.releaseRequested = true;
+        continue;
+      }
       if (comboKey != null) {
         if (hero.comboKey != comboKey) continue;
         _flyHeroNow(flight);
@@ -343,7 +358,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       svgaUrl: svga,
       iconUrl: request.imageUrl,
     );
-    final ready = svga.isEmpty || SvgaCache.isInMemory(svga);
+    final ready = svga.isEmpty || _animationReady(svga);
     final holdMs = ready
         ? _resolveHoldMs(configuredMs, svga)
         : (configuredMs > 0 ? configuredMs : _heroHoldMs);
@@ -380,10 +395,24 @@ class GiftFlightManagerState extends State<GiftFlightManager>
     _scheduleRebuild();
   }
 
-  /// [configuredMs] of 0 means the SVGA's own length; stills get 3 s.
+  /// The gift's animation (SVGA or MP4) can play without a network wait.
+  static bool _animationReady(String url) => MediaUrlUtil.isVideoUrl(url)
+      ? GiftVideoCache.isReady(url)
+      : SvgaCache.isInMemory(url);
+
+  static Future<void> _loadAnimation(String url) => MediaUrlUtil.isVideoUrl(url)
+      ? GiftVideoCache.file(url)
+      : SvgaCache.load(url);
+
+  /// [configuredMs] of 0 means the animation's own length; stills get 3 s.
   int _resolveHoldMs(int configuredMs, String svgaUrl) {
     if (configuredMs > 0) return configuredMs;
     if (svgaUrl.isEmpty) return GiftShowDuration.stillImageMs;
+    if (MediaUrlUtil.isVideoUrl(svgaUrl)) {
+      final ms = GiftVideoCache.durationMs(svgaUrl);
+      if (ms == null) return GiftShowDuration.stillImageMs;
+      return ms.clamp(1000, GiftShowDuration.maxMs);
+    }
     final params = SvgaCache.peek(svgaUrl)?.params;
     final fps = params?.fps ?? 0;
     final frames = params?.frames ?? 0;
@@ -417,12 +446,27 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       if (resumed) return;
       resumed = true;
       if (!mounted) return;
-      final holdMs = loaded
+      final fullHoldMs = loaded
           ? _resolveHoldMs(configuredMs, svgaUrl)
           : (configuredMs > 0 ? configuredMs : GiftShowDuration.stillImageMs);
-      final totalMs = _heroPopMs + holdMs + _heroFlyMs;
       for (final flight in group) {
         final hero = flight.hero!;
+        // The download wait counts toward the show time instead of being
+        // added in front of it, which kept first sends in the centre for
+        // 5-13 s. A late SVGA still gets a short look before the flight.
+        final waitedMs = DateTime.now().millisecondsSinceEpoch -
+            hero.startedAtMs -
+            _heroPopMs;
+        var holdMs = fullHoldMs - (waitedMs > 0 ? waitedMs : 0);
+        if (loaded && holdMs < _heroLateSvgaShowMs) {
+          holdMs = _heroLateSvgaShowMs;
+        } else if (!loaded && holdMs < 0) {
+          holdMs = 0;
+        }
+        if (hero.releaseRequested && holdMs > _heroReleasedHoldMs) {
+          holdMs = _heroReleasedHoldMs;
+        }
+        final totalMs = _heroPopMs + holdMs + _heroFlyMs;
         hero.waitingForSvga = false;
         if (!loaded) hero.svgaUrl = '';
         if (!_activeSingles.contains(flight)) continue;
@@ -443,7 +487,7 @@ class GiftFlightManagerState extends State<GiftFlightManager>
       }
     }
 
-    SvgaCache.load(svgaUrl)
+    _loadAnimation(svgaUrl)
         .timeout(_heroSvgaWait)
         .then(
           (_) => resume(loaded: true),
@@ -823,6 +867,9 @@ class _HeroTiming {
   /// Paused after the pop until the SVGA has decoded.
   bool waitingForSvga;
 
+  /// A newer gift asked this one to leave while it was waiting for its SVGA.
+  bool releaseRequested = false;
+
   _HeroTiming({
     required this.comboKey,
     required this.popEnd,
@@ -856,6 +903,10 @@ class _HeroAnimatedIcon extends StatefulWidget {
 class _HeroAnimatedIconState extends State<_HeroAnimatedIcon> {
   bool _loaded = false;
 
+  void _onLoaded() {
+    if (mounted && !_loaded) setState(() => _loaded = true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -869,14 +920,20 @@ class _HeroAnimatedIconState extends State<_HeroAnimatedIcon> {
           child: SizedBox(
             width: widget.size,
             height: widget.size,
-            child: RaveSVGAPlayer(
-              resUrl: widget.svgaUrl,
-              fit: BoxFit.contain,
-              repeat: true,
-              onLoaded: () {
-                if (mounted && !_loaded) setState(() => _loaded = true);
-              },
-            ),
+            child: MediaUrlUtil.isVideoUrl(widget.svgaUrl)
+                ? GiftVideoPlayer(
+                    url: widget.svgaUrl,
+                    muted: true,
+                    repeat: true,
+                    onLoaded: _onLoaded,
+                  )
+                : RaveSVGAPlayer(
+                    resUrl: widget.svgaUrl,
+                    fit: BoxFit.contain,
+                    repeat: true,
+                    filterQuality: FilterQuality.medium,
+                    onLoaded: _onLoaded,
+                  ),
           ),
         ),
       ],

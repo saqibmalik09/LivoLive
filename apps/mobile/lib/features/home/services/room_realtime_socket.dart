@@ -6,6 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:sk_live/core/util/app_constants.dart';
 import 'package:sk_live/core/services/app_telemetry.dart';
+import 'package:sk_live/core/util/gift_video_cache.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 import 'package:sk_live/features/home/services/room_live_broadcast.dart';
 
 typedef RoomGatewayEventHandler =
@@ -283,6 +286,18 @@ class RoomRealtimeSocket {
         if (envelope == null) return;
         final data = _asMap(envelope['data']) ?? envelope;
         onEvent?.call('lucky_win', data);
+      })
+      ..on('gift:warm', (raw) {
+        // Sent as a gift starts settling, before its room_gift: fetching the
+        // animation now means it is ready when the gift lands. Nothing shows.
+        final data = _asMap(raw);
+        final url = data?['svga_url']?.toString().trim() ?? '';
+        if (url.isEmpty) return;
+        if (MediaUrlUtil.isVideoUrl(url)) {
+          unawaited(GiftVideoCache.prefetch([url], limit: 1));
+        } else if (MediaUrlUtil.isSvgaUrl(url)) {
+          unawaited(SvgaCache.preload([url]));
+        }
       })
       ..on('dm:event', (raw) {
         final envelope = _asMap(raw);

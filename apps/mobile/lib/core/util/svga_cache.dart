@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show decodeImageFromList;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_svga/flutter_svga.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 
 /// Caches SVGA animations so a gift does not re-download and re-parse on every
 /// play.
@@ -41,17 +44,27 @@ class SvgaCache {
 
   static final Set<String> _pinned = <String>{};
 
+  /// One cache key per animation. The gift sheet stores the catalog URL with
+  /// the storage host rewritten; room broadcasts carry the raw `svga_url`
+  /// from the database. Without this they missed each other's cache, so the
+  /// first play for someone else always downloaded again.
+  static String normalize(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('assets/')) return trimmed;
+    return SupabaseImageTransform.rewriteStorageHost(trimmed);
+  }
+
   static void pin(Iterable<String> urls) {
     for (final raw in urls) {
-      final url = raw.trim();
+      final url = normalize(raw);
       if (url.isNotEmpty) _pinned.add(url);
     }
   }
 
-  static bool isInMemory(String url) => _memory.containsKey(url);
+  static bool isInMemory(String url) => _memory.containsKey(normalize(url));
 
   /// The decoded animation if it is in memory, without touching LRU order.
-  static MovieEntity? peek(String url) => _memory[url];
+  static MovieEntity? peek(String url) => _memory[normalize(url)];
   static Directory? _cacheDir;
 
   /// FNV-1a over the url. Deterministic across runs, so disk entries survive a
@@ -100,7 +113,8 @@ class SvgaCache {
   ///
   /// Concurrent calls for the same url share one download — several people
   /// sending the same gift at once used to trigger several identical fetches.
-  static Future<MovieEntity> load(String url, {bool fresh = false}) {
+  static Future<MovieEntity> load(String rawUrl, {bool fresh = false}) {
+    final url = normalize(rawUrl);
     final cached = _memory[url];
     if (cached != null) {
       _remember(url, cached); // refresh LRU position
@@ -135,6 +149,7 @@ class SvgaCache {
     _memory.clear();
     _inFlight.clear();
     _pinned.clear();
+    _diskWarmed.clear();
   }
 
   /// Loads a bundled `assets/...` animation, keeping the decoded result.
@@ -161,21 +176,79 @@ class SvgaCache {
 
   static Future<MovieEntity> _loadAsset(String assetPath) async {
     final data = await rootBundle.load(assetPath);
-    final entity = await SVGAParser.shared.decodeFromBuffer(
-      data.buffer.asUint8List(),
-    );
+    final entity = await _decode(data.buffer.asUint8List());
     _remember(assetPath, entity);
     return entity;
   }
+
+  /// `SVGAParser.decodeFromBuffer` inflates (pure-Dart zlib) and parses the
+  /// protobuf on the UI isolate: a 1-3 MB gift froze the room for hundreds of
+  /// ms on a cheap phone, right when the gift should appear. Here the inflate
+  /// (native zlib) and parse run on a background isolate; only the image
+  /// decodes, which are async in the engine, stay on this one.
+  static Future<MovieEntity> _decode(Uint8List bytes) async {
+    final MovieEntity movie;
+    try {
+      movie = await Isolate.run(() => _parseOffMain(bytes));
+    } catch (e) {
+      debugPrint('[svga] background parse failed, decoding inline: $e');
+      return SVGAParser.shared.decodeFromBuffer(bytes);
+    }
+    return _prepareImages(movie);
+  }
+
+  /// Mirrors the parser's own steps: inflate, parse, and resolve KEEP shapes
+  /// to the previous frame's shapes.
+  static MovieEntity _parseOffMain(Uint8List bytes) {
+    final movie = MovieEntity.fromBuffer(zlib.decode(bytes));
+    for (final sprite in movie.sprites) {
+      List<ShapeEntity>? lastShape;
+      for (final frame in sprite.frames) {
+        if (frame.shapes.isEmpty) continue;
+        if (frame.shapes[0].type.name == 'KEEP' && lastShape != null) {
+          frame.shapes = lastShape;
+        } else {
+          lastShape = frame.shapes;
+        }
+      }
+    }
+    return movie;
+  }
+
+  static Future<MovieEntity> _prepareImages(MovieEntity movie) async {
+    final images = movie.images;
+    if (images.isNotEmpty) {
+      await Future.wait(
+        images.entries.map((item) async {
+          final value = item.value;
+          final data = value is Uint8List ? value : Uint8List.fromList(value);
+          if (_isMp3(data)) {
+            movie.audiosData[item.key] = data;
+            return;
+          }
+          try {
+            movie.bitmapCache[item.key] = await decodeImageFromList(data);
+          } catch (e) {
+            debugPrint('[svga] image ${item.key} failed to decode: $e');
+          }
+        }),
+      );
+    }
+    movie.releaseMemory();
+    return movie;
+  }
+
+  static bool _isMp3(Uint8List data) =>
+      data.length >= 3 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33;
 
   static Future<MovieEntity> _load(String url) async {
     File? file;
     try {
       file = File('${(await _dir()).path}/${_keyFor(url)}.svga');
       if (await file.exists()) {
-        final entity = await SVGAParser.shared
-            .decodeFromBuffer(await file.readAsBytes())
-            .timeout(_decodeTimeout);
+        final entity = await _decode(
+          await file.readAsBytes(),
+        ).timeout(_decodeTimeout);
         _remember(url, entity);
         return entity;
       }
@@ -188,9 +261,7 @@ class SvgaCache {
     }
 
     final bytes = await _download(url);
-    final entity = await SVGAParser.shared
-        .decodeFromBuffer(bytes)
-        .timeout(_decodeTimeout);
+    final entity = await _decode(bytes).timeout(_decodeTimeout);
     _remember(url, entity);
 
     // Persist after decoding, so a corrupt download is never cached.
@@ -239,7 +310,7 @@ class SvgaCache {
   static Future<void> preload(Iterable<String> urls) async {
     final pending = <String>{};
     for (final raw in urls) {
-      final url = raw.trim();
+      final url = normalize(raw);
       if (url.isEmpty) continue;
       if (_memory.containsKey(url)) continue;
       if (_inFlight.containsKey(url)) continue;
@@ -259,6 +330,48 @@ class SvgaCache {
             return MovieEntity();
           }),
         ),
+      );
+    }
+  }
+
+  static final Set<String> _diskWarmed = <String>{};
+
+  /// Downloads `.svga` files to disk only — no decode, so no bitmaps held in
+  /// memory. The first send of a gift then reads from disk instead of the
+  /// network, which is what made the first play show the PNG and only the
+  /// second play show the animation. Once per URL per app session, two at a
+  /// time so it never competes with what is on screen.
+  static Future<void> warmDisk(Iterable<String> urls, {int limit = 40}) async {
+    final queue = <String>[];
+    for (final raw in urls) {
+      if (queue.length >= limit) break;
+      final url = normalize(raw);
+      if (url.isEmpty || url.startsWith('assets/')) continue;
+      if (_memory.containsKey(url) || _inFlight.containsKey(url)) continue;
+      if (!_diskWarmed.add(url)) continue;
+      queue.add(url);
+    }
+    if (queue.isEmpty) return;
+    final dir = await _dir();
+    const batch = 2;
+    for (var i = 0; i < queue.length; i += batch) {
+      await Future.wait(
+        queue.skip(i).take(batch).map((url) async {
+          try {
+            final file = File('${dir.path}/${_keyFor(url)}.svga');
+            if (await file.exists()) return;
+            final bytes = await _download(url);
+            if (await file.exists()) return;
+            // Write then rename, so a play reading the disk copy at the same
+            // moment never decodes a half-written file.
+            final partial = File('${file.path}.part');
+            await partial.writeAsBytes(bytes, flush: true);
+            await partial.rename(file.path);
+          } catch (e) {
+            _diskWarmed.remove(url);
+            debugPrint('[svga] disk warm skipped $url: $e');
+          }
+        }),
       );
     }
   }

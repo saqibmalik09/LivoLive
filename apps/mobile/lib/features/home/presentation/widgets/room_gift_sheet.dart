@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/providers/auth_provider.dart';
 import 'package:sk_live/core/providers/wallet_coins_provider.dart';
 import 'package:sk_live/core/util/svga_cache.dart';
+import 'package:sk_live/core/util/gift_video_cache.dart';
+import 'package:sk_live/core/util/media_url_util.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 
 import 'package:sk_live/core/providers/shop_provider.dart';
@@ -395,7 +397,9 @@ class _RoomGiftSheetState extends ConsumerState<RoomGiftSheet>
         // Every gift with an animation plays it on send (full screen, or in
         // the centre before the flight), so warm it while the user picks.
         final svga = gift.svgaUrl?.trim() ?? '';
-        if (svga.isNotEmpty) {
+        if (MediaUrlUtil.isVideoUrl(svga)) {
+          unawaited(GiftVideoCache.prefetch([svga]));
+        } else if (svga.isNotEmpty) {
           unawaited(SvgaCache.preload([svga]));
         }
       },

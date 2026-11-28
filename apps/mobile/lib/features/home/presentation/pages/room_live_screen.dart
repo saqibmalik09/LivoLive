@@ -10981,6 +10981,7 @@ class _RoomLiveScreenState extends ConsumerState<RoomLiveScreen>
                   child: RoomFullScreenGift(
                     svgaUrl: svgaUrl,
                     fallbackIconUrl: fallbackIconUrl,
+                    muted: _roomAudioMuted,
                     onFinished: () {
                       _onFullScreenGiftFinished(entry);
                     },

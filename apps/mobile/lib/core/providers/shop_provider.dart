@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:sk_live/core/services/hive_cache_service.dart';
 import 'package:sk_live/core/util/app_image_cache.dart';
+import 'package:sk_live/core/util/gift_video_cache.dart';
 import 'package:sk_live/core/util/gift_show_duration.dart';
 import 'package:sk_live/core/util/media_url_util.dart';
+import 'package:sk_live/core/util/svga_cache.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -319,6 +321,34 @@ void prefetchGiftCatalogIcons(GiftCatalog catalog, {int limit = 16}) {
   }
 }
 
+/// Puts gift `.svga` files on disk ahead of the first send, so the first play
+/// of each gift is the animation and not its listing PNG. Disk only, bounded,
+/// once per URL per session; starts after the room-entry burst.
+void warmGiftCatalogAnimations(GiftCatalog catalog, {int limit = 24}) {
+  if (catalog.isEmpty) return;
+  final urls = <String>[];
+  final videos = <String>[];
+  for (final cat in catalog.categories) {
+    for (final gift in catalog.giftsByCategory[cat.id] ?? const <ShopItem>[]) {
+      final media = gift.svgaUrl?.trim() ?? '';
+      if (media.isEmpty) continue;
+      if (MediaUrlUtil.isSvgaUrl(media)) {
+        urls.add(media);
+      } else if (MediaUrlUtil.isVideoUrl(media)) {
+        videos.add(media);
+      }
+      if (urls.length + videos.length >= limit) break;
+    }
+    if (urls.length + videos.length >= limit) break;
+  }
+  if (urls.isEmpty && videos.isEmpty) return;
+  Timer(const Duration(seconds: 3), () {
+    if (urls.isNotEmpty) unawaited(SvgaCache.warmDisk(urls, limit: limit));
+    // Videos are several MB each, so only the first few are warmed.
+    if (videos.isNotEmpty) unawaited(GiftVideoCache.prefetch(videos, limit: 6));
+  });
+}
+
 String _catalogFingerprint(GiftCatalog catalog) {
   return HiveCacheService.giftCatalogFingerprint([
     for (final cat in catalog.categories)
@@ -335,6 +365,7 @@ final giftCatalogProvider = FutureProvider<GiftCatalog>((ref) async {
   final cached = _catalogFromCache(HiveCacheService.loadGiftCatalog());
   if (cached != null && !cached.isEmpty) {
     prefetchGiftCatalogIcons(cached);
+    warmGiftCatalogAnimations(cached);
     final cachedFp = _catalogFingerprint(cached);
     // Paint from cache now. If the shop changed, refresh and rebuild once so
     // an open sheet picks up new gifts without waiting for an app restart.
@@ -354,6 +385,7 @@ final giftCatalogProvider = FutureProvider<GiftCatalog>((ref) async {
 
   final fresh = await _fetchGiftCatalog();
   prefetchGiftCatalogIcons(fresh);
+  warmGiftCatalogAnimations(fresh);
   return fresh;
 });
 

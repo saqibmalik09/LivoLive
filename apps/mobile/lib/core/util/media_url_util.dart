@@ -77,6 +77,21 @@ class MediaUrlUtil {
     }
   }
 
+  /// Gift animations may be MP4 instead of SVGA; both live in `svga_url`.
+  static bool isVideoUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return false;
+    String path;
+    try {
+      path = Uri.parse(url.trim()).path.toLowerCase();
+    } catch (_) {
+      path = url.trim().toLowerCase();
+    }
+    return path.endsWith('.mp4') ||
+        path.endsWith('.m4v') ||
+        path.endsWith('.mov') ||
+        path.endsWith('.webm');
+  }
+
   static ({String? imageUrl, String? svgaUrl}) resolveEntrancePatti({
     String? imageUrl,
     String? svgaUrl,
